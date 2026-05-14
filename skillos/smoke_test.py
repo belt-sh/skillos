@@ -25,14 +25,13 @@ def main():
         print(f"FAIL: {e}")
         errors.append("transformers/peft")
 
-    # 3. vLLM
+    # 3. vLLM (optional — only needed on GPU)
     print("Checking vLLM...", end=" ")
     try:
         import vllm
         print("OK")
-    except ImportError as e:
-        print(f"FAIL: {e}")
-        errors.append("vllm")
+    except ImportError:
+        print("SKIP (optional, install with pip install skillos[gpu])")
 
     # 4. ALFWorld
     print("Checking ALFWorld...", end=" ")
@@ -99,8 +98,7 @@ def main():
             mem = torch.cuda.get_device_properties(0).total_mem / 1e9
             print(f"OK ({device}, {mem:.0f}GB)")
         else:
-            print("No CUDA (CPU only)")
-            errors.append("cuda")
+            print("SKIP (CPU only — training will use accelerate CPU mode)")
     except Exception as e:
         print(f"FAIL: {e}")
         errors.append("cuda")

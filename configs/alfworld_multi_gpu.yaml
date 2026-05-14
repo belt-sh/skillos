@@ -14,7 +14,6 @@ gradient_accumulation_steps: 8  # effective batch = 32 (4 * 8)
 learning_rate: 1.0e-6
 num_generations: 8  # match paper GRPO group size
 max_completion_length: 4096
-max_prompt_length: 16384
 temperature: 1.0
 
 # vLLM — server mode for multi-GPU, dedicate GPU(s) to inference

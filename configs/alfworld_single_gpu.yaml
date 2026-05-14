@@ -14,7 +14,6 @@ gradient_accumulation_steps: 8  # effective batch = 8
 learning_rate: 1.0e-6
 num_generations: 4  # paper uses 8, reduced for single GPU VRAM
 max_completion_length: 4096
-max_prompt_length: 16384
 temperature: 1.0
 
 # vLLM — colocate mode shares GPU between inference and training

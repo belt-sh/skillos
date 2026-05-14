@@ -6,41 +6,31 @@ auto-discovered by GRPOTrainer for multi-turn rollouts.
 
 from __future__ import annotations
 
-import json
 import os
-import re
+from pathlib import Path
 
-import alfworld.agents.environment as alfworld_env
 import yaml
-
-from skillos.skills.repo import SkillRepo
 
 
 def _load_alfworld_config() -> dict:
-    """Load ALFWorld config, using default if not specified."""
+    """Load ALFWorld config."""
     config_path = os.environ.get(
         "ALFWORLD_CONFIG",
-        os.path.join(os.path.dirname(alfworld_env.__file__), "..", "configs", "base_config.yaml"),
+        str(Path(__file__).parent.parent.parent / "configs" / "alfworld_env.yaml"),
     )
     with open(config_path) as f:
         return yaml.safe_load(f)
 
 
-# Shared environment pool — ALFWorld envs are expensive to create.
-# GRPOTrainer creates one ALFWorldEnv instance per generation,
-# but they all share the underlying ALFWorld environment batch.
-_env_pool: list | None = None
-_env_config: dict | None = None
+def _get_env():
+    """Create a fresh ALFWorld TextWorld environment."""
+    from alfworld.agents.environment import get_environment
 
-
-def _get_env_pool():
-    global _env_pool, _env_config
-    if _env_pool is None:
-        _env_config = _load_alfworld_config()
-        env = alfworld_env.AlfredTWEnv(_env_config, train_eval="train")
-        env = env.init_env(batch_size=1)
-        _env_pool = [env]
-    return _env_pool
+    config = _load_alfworld_config()
+    AlfredTWEnv = get_environment("AlfredTWEnv")
+    env = AlfredTWEnv(config, train_eval="train")
+    env = env.init_env(batch_size=1)
+    return env
 
 
 class ALFWorldEnv:
@@ -59,15 +49,11 @@ class ALFWorldEnv:
         self.max_steps = 50
         self.trajectory: list[dict] = []
         self.task_description = ""
-        self.skill_repo: SkillRepo | None = None
         self._env = None
         self._admissible_actions: list[str] = []
 
-    def reset(self, skill_repo: SkillRepo | None = None, **kwargs) -> str:
+    def reset(self, **kwargs) -> str:
         """Reset environment for a new episode.
-
-        Args:
-            skill_repo: Optional skill repo for skill-augmented execution.
 
         Returns:
             Initial observation with task description and available actions.
@@ -76,11 +62,8 @@ class ALFWorldEnv:
         self.done = False
         self.steps = 0
         self.trajectory = []
-        self.skill_repo = skill_repo
 
-        # Get an ALFWorld environment
-        envs = _get_env_pool()
-        self._env = envs[0]
+        self._env = _get_env()
         obs, infos = self._env.reset()
 
         observation = obs[0]
@@ -89,17 +72,8 @@ class ALFWorldEnv:
         # Extract task description from first observation
         self.task_description = observation.split("\n")[0] if observation else "Unknown task"
 
-        # Build initial prompt with skills if available
-        parts = [f"Task: {self.task_description}\n"]
-
-        if self.skill_repo:
-            retrieved = self.skill_repo.retrieve(self.task_description, top_k=5)
-            if retrieved:
-                parts.append("## Relevant Skills")
-                parts.append(self.skill_repo.format_skills(retrieved))
-                parts.append("")
-
-        parts.append(f"Observation: {observation}")
+        parts = [f"Task: {self.task_description}"]
+        parts.append(f"\nObservation: {observation}")
         parts.append(f"\nAdmissible actions: {', '.join(self._admissible_actions)}")
 
         return "\n".join(parts)
