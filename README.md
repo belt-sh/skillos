@@ -1,29 +1,20 @@
 # SkillOS
 
-PyTorch implementation of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Google Cloud AI Research + UIUC + MIT, 2026) using [HuggingFace TRL](https://github.com/huggingface/trl). The paper has no official code release — this repo provides a clean, reproducible implementation with open weights.
+PyTorch implementation of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Google Cloud AI Research + UIUC + MIT, 2026) using [HuggingFace TRL](https://github.com/huggingface/trl). The paper has no official code release - this repo provides a clean, reproducible implementation with open weights.
 
-**The paper's key result:** An RL-trained 8B curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. Targeted training on curation decisions beats raw model scale — meaning better agent memory management on consumer hardware than frontier API models.
+**The paper's key result:** An RL-trained 8B curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. Targeted training on curation decisions beats raw model scale - meaning better agent memory management on consumer hardware than frontier API models.
 
 ## How It Works
 
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Executor   │────▶│  Environment │────▶│  Trajectory │
-│  (frozen)    │     │  (ALFWorld)  │     │  (results)  │
-└─────────────┘     └──────────────┘     └──────┬──────┘
-       ▲                                        │
-       │ retrieves skills                       ▼
-┌──────┴──────┐                          ┌──────────────┐
-│  SkillRepo  │◀─────────────────────────│   Curator    │
-│  (markdown) │   insert/update/delete   │  (trained)   │
-└─────────────┘                          └──────────────┘
-```
+<p align="center">
+  <img src="assets/banner.png" alt="SkillOS Training Loop" width="720" />
+</p>
 
-1. **Frozen executor** solves tasks using retrieved skills — never trained, just inference
+1. **Frozen executor** solves tasks using retrieved skills (never trained, just inference)
 2. **Curator** (the model we train) observes trajectories and manages the skill repo via tool calls
 3. **GRPO** optimizes the curator based on whether its curation decisions help future tasks
 4. **Composite reward:** task outcome + valid function calls + content quality + compression
-5. Skills are markdown with YAML frontmatter — the format used by [Anthropic](https://docs.anthropic.com/en/docs/agents/skills), [belt](https://belt.sh), and others
+5. Skills are markdown with YAML frontmatter, the format used by [Anthropic](https://docs.anthropic.com/en/docs/agents/skills), [belt](https://belt.sh), and others
 
 ## Quick Start
 
@@ -35,7 +26,7 @@ pip install -e ".[dev]"
 alfworld-download -f
 export ALFWORLD_DATA=~/.cache/alfworld
 
-# Smoke test — verify all dependencies load
+# Smoke test - verify all dependencies load
 python -m skillos.smoke_test
 
 # Train curator (single GPU, LoRA, heuristic executor)
@@ -48,9 +39,9 @@ Reproducing Table 1 from the paper (Qwen3-8B executor):
 
 | Method | Curator | Pick | Look | Clean | Heat | Cool | Pick2 | **Avg SR** | Steps |
 |---|---|---|---|---|---|---|---|---|---|
-| No Memory | — | 78.1 | 46.2 | 33.3 | 37.5 | 29.3 | 47.2 | 47.9 | 21.1 |
-| SkillOS (paper) | Qwen3-8B | — | — | — | — | — | — | **61.2** | **18.9** |
-| SkillOS (ours) | Qwen3-8B | — | — | — | — | — | — | TBD | TBD |
+| No Memory | - | 78.1 | 46.2 | 33.3 | 37.5 | 29.3 | 47.2 | 47.9 | 21.1 |
+| SkillOS (paper) | Qwen3-8B | - | - | - | - | - | - | **61.2** | **18.9** |
+| SkillOS (ours) | Qwen3-8B | - | - | - | - | - | - | TBD | TBD |
 
 ## Project Structure
 
@@ -86,7 +77,7 @@ Both the frozen executor and content quality judge support multiple backends:
 ```yaml
 # Frozen executor (generates trajectories for curator to learn from)
 executor:
-  type: heuristic  # No model — pipeline validation (default)
+  type: heuristic  # No model - pipeline validation (default)
   # type: local     # Local transformers model
   # model: Qwen/Qwen3-8B
   # type: vllm      # vLLM server on dedicated GPU
@@ -113,7 +104,7 @@ judge:
 
 ## Roadmap
 
-### v0.1 — Reproduce SkillOS on ALFWorld (in progress)
+### v0.1 - Reproduce SkillOS on ALFWorld (in progress)
 
 Reproduce the paper's core result: an RL-trained 8B curator that manages a skill repo for a frozen executor.
 
@@ -124,23 +115,23 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 - [x] Pluggable executor backends (heuristic / local / vLLM / API)
 - [x] Pluggable judge backends (heuristic / local / vLLM / API)
 - [ ] Grouped task stream data loader wired into training
-- [ ] Single-GPU training with LoRA — full loop completing
+- [ ] Single-GPU training with LoRA - full loop completing
 - [ ] Match paper's ALFWorld results (target: 61.2% SR)
 
-### v0.2 — Reasoning + Cross-Domain Transfer
+### v0.2 - Reasoning + Cross-Domain Transfer
 
 - [ ] Reasoning environment (DeepMath-103K + GPQA-Diamond)
 - [ ] Match reasoning results (target: 73.8% avg accuracy)
 - [ ] Cross-domain transfer: reasoning-trained curator on ALFWorld (+13.3%)
 - [ ] WebShop environment integration
 
-### v0.3 — Open Weights
+### v0.3 - Open Weights
 
 - [ ] Full training runs on all benchmarks
 - [ ] Publish trained curator weights on HuggingFace
 - [ ] Evaluation suite for comparing curator quality
 
-### v1.0 — Production Curator
+### v1.0 - Production Curator
 
 - [ ] Real-world trajectory extraction (long transcripts → structured traces)
 - [ ] Curator serving via vLLM/Ollama
@@ -158,20 +149,20 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 
 ## Stack
 
-- **[TRL](https://github.com/huggingface/trl)** — GRPOTrainer with `environment_factory` for multi-turn RL
-- **[vLLM](https://github.com/vllm-project/vllm)** — Fast inference during rollout generation
-- **[Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)** — Base model (Apache 2.0)
-- **[ALFWorld](https://github.com/alfworld/alfworld)** — Household task environment
-- **[rank-bm25](https://github.com/dorianbrown/rank_bm25)** — Skill retrieval
+- **[TRL](https://github.com/huggingface/trl)** - GRPOTrainer with `environment_factory` for multi-turn RL
+- **[vLLM](https://github.com/vllm-project/vllm)** - Fast inference during rollout generation
+- **[Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)** - Base model (Apache 2.0)
+- **[ALFWorld](https://github.com/alfworld/alfworld)** - Household task environment
+- **[rank-bm25](https://github.com/dorianbrown/rank_bm25)** - Skill retrieval
 
 All components permissively licensed (Apache 2.0 / MIT). Trained models are fully commercial-use.
 
 ## References
 
-- [SkillOS: Learning Skill Curation for Self-Evolving Agents](https://arxiv.org/abs/2605.06614) — Ouyang et al., 2026
-- [GRPO: Group Relative Policy Optimization](https://arxiv.org/abs/2402.03300) — DeepSeek-Math, Shao et al., 2024
+- [SkillOS: Learning Skill Curation for Self-Evolving Agents](https://arxiv.org/abs/2605.06614) - Ouyang et al., 2026
+- [GRPO: Group Relative Policy Optimization](https://arxiv.org/abs/2402.03300) - DeepSeek-Math, Shao et al., 2024
 - [Anthropic SKILL.md format](https://docs.anthropic.com/en/docs/agents/skills)
-- [belt CLI](https://github.com/belt-sh/cli) — Agent skill management
+- [belt CLI](https://github.com/belt-sh/cli) - Agent skill management
 
 ## License
 
