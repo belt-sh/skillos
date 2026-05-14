@@ -47,25 +47,24 @@ python -m skillos.train --config configs/alfworld_single_gpu.yaml
 ```
 skillos/
   envs/
-    alfworld.py      # ALFWorld wrapped as TRL environment
-    reasoning.py     # AIME/GPQA/DeepMath reasoning tasks
+    curator_env.py   # Curator's environment: runs frozen executor, exposes skill tools
+    alfworld.py      # ALFWorld wrapped as TRL environment (executor-only mode)
   curator/
-    model.py         # Curator model with insert/update/delete tools
-    prompts.py       # System prompts (from paper Appendix A)
+    model.py         # Parse curator tool calls, apply to skill repo
+    prompts.py       # All prompts verbatim from paper Appendix A
   skills/
-    repo.py          # Markdown skill store
-    retrieval.py     # BM25 retrieval
+    repo.py          # Markdown skill store + BM25 retrieval
   rewards/
-    composite.py     # r_task + r_fc + r_cnt + r_comp
-    judge.py         # Content quality judge
+    composite.py     # r_task + r_fc + r_cnt + r_comp (Eq. 1)
+    judge.py         # Content quality judge (heuristic + LLM prompt)
   data/
     grouping.py      # Grouped task stream construction
-  train.py           # Main training script
+  train.py           # Main training script (trains curator, not executor)
   smoke_test.py      # Verify setup
 configs/
-  alfworld_single_gpu.yaml
-  alfworld_multi_gpu.yaml
-  reasoning_single_gpu.yaml
+  alfworld_env.yaml            # ALFWorld environment config
+  alfworld_single_gpu.yaml     # Single GPU training (LoRA)
+  alfworld_multi_gpu.yaml      # Multi GPU training (matches paper)
 ```
 
 ## Roadmap

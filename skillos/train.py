@@ -1,4 +1,9 @@
-"""Main training script — train a skill curator with GRPO on ALFWorld.
+"""Main training script — train a skill curator with GRPO.
+
+The SkillOS training loop:
+1. Frozen executor solves ALFWorld tasks (inference only, not trained)
+2. Curator (THIS model, being trained) sees trajectories and curates the skill repo
+3. GRPO optimizes curator based on composite reward
 
 Usage:
     # Smoke test on CPU (tiny model, verifies full loop)
@@ -22,8 +27,7 @@ from datasets import Dataset
 from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
-from skillos.envs.alfworld import ALFWorldEnv
-from skillos.skills.repo import SkillRepo
+from skillos.envs.curator_env import CuratorEnv
 
 
 def _has_vllm() -> bool:
@@ -35,20 +39,31 @@ def _has_vllm() -> bool:
 
 
 def build_dataset(num_episodes: int = 1000) -> Dataset:
-    """Build a dataset of ALFWorld task prompts.
+    """Build a dataset of curator prompts.
 
-    Each row is one episode. The environment handles task selection in reset().
+    Each row triggers one curator episode:
+    1. CuratorEnv.reset() runs the frozen executor on an ALFWorld task
+    2. Returns the trajectory as observation
+    3. Curator decides insert/update/delete via tool calls
     """
     return Dataset.from_dict({
         "prompt": [
-            [{"role": "user", "content": "Complete the household task in the environment. Use the act tool to take actions."}]
+            [{"role": "user", "content": (
+                "You are a skill curator. Analyze the agent trajectory below and decide "
+                "whether to insert a new skill, update an existing skill, or delete a skill "
+                "from the skill repository. Use the available tools to manage skills."
+            )}]
         ] * num_episodes,
     })
 
 
-def reward_func(environments: list[ALFWorldEnv], **kwargs) -> list[float]:
-    """Reward function — reads binary success from each environment."""
-    return [env.reward for env in environments]
+def reward_func(environments: list[CuratorEnv], **kwargs) -> list[float]:
+    """Compute composite reward from each curator environment."""
+    rewards = []
+    for env in environments:
+        env.compute_reward()
+        rewards.append(env.reward)
+    return rewards
 
 
 def train(config: dict):
@@ -66,7 +81,7 @@ def train(config: dict):
     dataset = build_dataset(num_episodes)
 
     grpo_kwargs = dict(
-        output_dir=config.get("output_dir", "./output/alfworld"),
+        output_dir=config.get("output_dir", "./output/curator"),
         num_train_epochs=config.get("epochs", 1),
         per_device_train_batch_size=config.get("batch_size", 1),
         gradient_accumulation_steps=config.get("gradient_accumulation_steps", 8),
@@ -109,16 +124,16 @@ def train(config: dict):
         train_dataset=dataset,
         args=grpo_args,
         peft_config=peft_config,
-        environment_factory=ALFWorldEnv,
+        environment_factory=CuratorEnv,
     )
 
     trainer.train()
-    trainer.save_model(config.get("output_dir", "./output/alfworld"))
-    print(f"Model saved to {config.get('output_dir', './output/alfworld')}")
+    trainer.save_model(config.get("output_dir", "./output/curator"))
+    print(f"Curator model saved to {config.get('output_dir', './output/curator')}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train SkillOS curator")
+    parser = argparse.ArgumentParser(description="Train SkillOS skill curator")
     parser.add_argument("--config", type=str, help="Path to YAML config file")
     parser.add_argument("--smoke", action="store_true", help="Run a minimal smoke test")
     args = parser.parse_args()

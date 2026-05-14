@@ -22,38 +22,17 @@ def reward_task(env_rewards: list[float], skip_first: bool = True) -> float:
     return sum(rewards) / max(len(rewards), 1)
 
 
-def reward_function_call(tool_calls: list[dict], skill_repo) -> float:
+def reward_function_call(ops: list[dict], skill_repo=None) -> float:
     """Fraction of curator function calls that are valid and execute successfully.
 
     r_fc = 1/|G| * sum(Valid(c_i))
+
+    Each op dict has: {"name": str, "arguments": dict, "valid": bool}
     """
-    if not tool_calls:
+    if not ops:
         return 0.0
-
-    valid = 0
-    total = 0
-    for call in tool_calls:
-        total += 1
-        fn_name = call.get("name", "")
-        args = call.get("arguments", {})
-
-        if fn_name == "new_skill_insert":
-            if "skill_name" in args and "content" in args:
-                # Check content has valid frontmatter
-                if "---" in args["content"]:
-                    valid += 1
-        elif fn_name == "skill_update":
-            if "skill_name" in args:
-                # Check skill exists in repo
-                if skill_repo and args["skill_name"] in skill_repo.skills:
-                    valid += 1
-        elif fn_name == "skill_delete":
-            if "skill_name" in args:
-                if skill_repo and args["skill_name"] in skill_repo.skills:
-                    valid += 1
-        # Unknown function names count as invalid
-
-    return valid / max(total, 1)
+    valid = sum(1 for op in ops if op.get("valid", False))
+    return valid / len(ops)
 
 
 def reward_compression(repo_tokens: int, input_tokens: int) -> float:
