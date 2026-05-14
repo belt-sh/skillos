@@ -10,9 +10,6 @@ From the curator's perspective, the "environment" is:
 - Observation: executor trajectory + existing skills + task result
 - Actions: new_skill_insert / skill_update / skill_delete (tool calls)
 - Reward: composite (task outcome + valid ops + content quality + compression)
-
-This wraps the frozen executor + ALFWorld into a single environment
-that TRL's GRPOTrainer can train the curator on.
 """
 
 from __future__ import annotations
@@ -22,8 +19,9 @@ from pathlib import Path
 
 import yaml
 
-from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE, CURATOR_SYSTEM
-from skillos.rewards.judge import judge_skill_quality_heuristic
+from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE
+from skillos.executor.executor import Executor, HeuristicExecutor, create_executor
+from skillos.rewards.judge import Judge, HeuristicJudge, create_judge
 from skillos.skills.repo import SkillRepo
 
 
@@ -36,63 +34,47 @@ def _load_alfworld_config() -> dict:
         return yaml.safe_load(f)
 
 
-def _run_frozen_executor(task_description: str, observation: str, admissible_actions: list[str],
-                         env, skills_text: str, max_steps: int = 30) -> dict:
-    """Run a frozen executor (hardcoded heuristic or LLM inference) on one ALFWorld task.
+# --- Module-level shared state ---
+# These persist across CuratorEnv instances within a training step.
+# TRL creates fresh env instances per generation, so we share state here.
 
-    For initial pipeline validation, this uses a simple random/heuristic policy.
-    Replace with actual LLM inference (frozen Qwen3-8B) for real training.
-
-    Returns dict with: trajectory, success, steps
-    """
-    trajectory = []
-    success = False
-    done = False
-    step = 0
-
-    while not done and step < max_steps:
-        # Simple heuristic executor for pipeline validation:
-        # Pick first admissible action (not great, but completes episodes)
-        if admissible_actions:
-            action = admissible_actions[0]
-        else:
-            break
-
-        obs, scores, dones, infos = env.step([action])
-        observation = obs[0]
-        admissible_actions = infos.get("admissible_commands", [[]])[0]
-        done = dones[0]
-        score = scores[0]
-        step += 1
-
-        trajectory.append({"step": step, "action": action, "observation": observation})
-
-        if done:
-            success = score > 0
-
-    return {
-        "trajectory": trajectory,
-        "success": success,
-        "steps": step,
-        "task_description": task_description,
-    }
-
-
-def _format_trajectory(result: dict) -> str:
-    """Format executor result as text for the curator."""
-    parts = []
-    for step in result["trajectory"]:
-        parts.append(f"Step {step['step']}: ACTION: {step['action']}")
-        parts.append(f"        OBSERVATION: {step['observation']}")
-    return "\n".join(parts)
-
-
-# --- Shared state across curator env instances within a training step ---
-# The skill repo persists across tasks in a group. Since TRL creates fresh
-# env instances per generation, we use module-level state that gets reset
-# at the start of each task group.
 _shared_skill_repo = SkillRepo()
 _alfworld_env = None
+_executor: Executor = HeuristicExecutor()
+_judge: Judge = HeuristicJudge()
+
+
+def configure(executor_config: dict | None = None, judge_config: dict | None = None):
+    """Configure the executor and judge backends.
+
+    Call this before training starts. Examples:
+
+        # Pipeline validation (default)
+        configure()
+
+        # Local models
+        configure(
+            executor_config={"type": "local", "model": "Qwen/Qwen3-8B"},
+            judge_config={"type": "local", "model": "Qwen/Qwen3-32B"},
+        )
+
+        # vLLM servers on dedicated GPUs
+        configure(
+            executor_config={"type": "vllm", "base_url": "http://localhost:8002/v1"},
+            judge_config={"type": "vllm", "base_url": "http://localhost:8001/v1"},
+        )
+
+        # Remote API
+        configure(
+            executor_config={"type": "api", "base_url": "https://api.inference.sh/v1"},
+            judge_config={"type": "api", "base_url": "https://api.inference.sh/v1"},
+        )
+    """
+    global _executor, _judge
+    if executor_config:
+        _executor = create_executor(executor_config)
+    if judge_config:
+        _judge = create_judge(judge_config)
 
 
 def reset_shared_state():
@@ -114,14 +96,63 @@ def _get_alfworld_env():
     return _alfworld_env
 
 
+def _run_frozen_executor(task_description: str, observation: str,
+                         admissible_actions: list[str], env,
+                         skills_text: str, max_steps: int = 30) -> dict:
+    """Run the frozen executor on one ALFWorld task."""
+    trajectory = []
+    action_history_parts = []
+    success = False
+    done = False
+    step = 0
+
+    while not done and step < max_steps:
+        action_history = "\n".join(action_history_parts[-3:]) if action_history_parts else ""
+
+        action = _executor.act(
+            task_description=task_description,
+            observation=observation,
+            admissible_actions=admissible_actions,
+            step_count=step,
+            action_history=action_history,
+            retrieved_skills=skills_text,
+        )
+
+        obs, scores, dones, infos = env.step([action])
+        observation = obs[0]
+        admissible_actions = infos.get("admissible_commands", [[]])[0]
+        done = dones[0]
+        score = scores[0]
+        step += 1
+
+        trajectory.append({"step": step, "action": action, "observation": observation})
+        action_history_parts.append(f"ACTION: {action}\nOBSERVATION: {observation}")
+
+        if done:
+            success = score > 0
+
+    return {
+        "trajectory": trajectory,
+        "success": success,
+        "steps": step,
+        "task_description": task_description,
+    }
+
+
+def _format_trajectory(result: dict) -> str:
+    parts = []
+    for step in result["trajectory"]:
+        parts.append(f"Step {step['step']}: ACTION: {step['action']}")
+        parts.append(f"        OBSERVATION: {step['observation']}")
+    return "\n".join(parts)
+
+
 class CuratorEnv:
     """Environment for training the skill curator with TRL GRPOTrainer.
 
     The curator sees an executor's trajectory and decides how to update
-    the skill repo. This IS the environment from the curator's perspective.
-
-    TRL auto-discovers the tool methods (new_skill_insert, skill_update,
-    skill_delete) and exposes them to the model being trained.
+    the skill repo. TRL auto-discovers the tool methods (new_skill_insert,
+    skill_update, skill_delete) and exposes them to the model being trained.
     """
 
     def __init__(self):
@@ -132,16 +163,11 @@ class CuratorEnv:
         self._input_tokens = 0
 
     def reset(self, **kwargs) -> str:
-        """Run frozen executor on an ALFWorld task, return trajectory for curator.
-
-        Returns:
-            Curator input: task description + past skills + trajectory + result
-        """
+        """Run frozen executor on an ALFWorld task, return trajectory for curator."""
         self.reward = 0.0
         self.done = False
         self._ops_applied = []
 
-        # Get ALFWorld env and reset for a new task
         env = _get_alfworld_env()
         obs, infos = env.reset()
         observation = obs[0]
@@ -157,7 +183,7 @@ class CuratorEnv:
             task_description, observation, admissible_actions, env, skills_text
         )
 
-        # Format curator input (what the curator sees)
+        # Format curator input
         trajectory_text = _format_trajectory(self._executor_result)
         result_text = "Success" if self._executor_result["success"] else "Failure"
 
@@ -182,13 +208,14 @@ class CuratorEnv:
             Confirmation message or error.
         """
         success = _shared_skill_repo.insert(skill_name, content)
-        op = {"name": "new_skill_insert", "arguments": {"skill_name": skill_name, "content": content}, "valid": success}
-        self._ops_applied.append(op)
-
+        self._ops_applied.append({
+            "name": "new_skill_insert",
+            "arguments": {"skill_name": skill_name, "content": content},
+            "valid": success,
+        })
         if success:
-            return f"Skill '{skill_name}' created successfully. Repo now has {len(_shared_skill_repo)} skills."
-        else:
-            return f"Failed to create skill '{skill_name}'. It may already exist or have invalid format."
+            return f"Skill '{skill_name}' created. Repo has {len(_shared_skill_repo)} skills."
+        return f"Failed to create '{skill_name}'. Already exists or invalid format."
 
     def skill_update(self, skill_name: str, new_name: str = "", new_content: str = "") -> str:
         """Update an existing skill in the skill repo.
@@ -206,14 +233,14 @@ class CuratorEnv:
             new_name=new_name if new_name else None,
             new_content=new_content if new_content else None,
         )
-        op = {"name": "skill_update", "arguments": {"skill_name": skill_name}, "valid": success}
-        self._ops_applied.append(op)
-
+        self._ops_applied.append({
+            "name": "skill_update",
+            "arguments": {"skill_name": skill_name},
+            "valid": success,
+        })
         if success:
-            display_name = new_name if new_name else skill_name
-            return f"Skill '{display_name}' updated successfully."
-        else:
-            return f"Failed to update skill '{skill_name}'. It may not exist."
+            return f"Skill '{new_name or skill_name}' updated."
+        return f"Failed to update '{skill_name}'. Does not exist."
 
     def skill_delete(self, skill_name: str) -> str:
         """Delete an existing skill from the skill repo.
@@ -225,42 +252,36 @@ class CuratorEnv:
             Confirmation message or error.
         """
         success = _shared_skill_repo.delete(skill_name)
-        op = {"name": "skill_delete", "arguments": {"skill_name": skill_name}, "valid": success}
-        self._ops_applied.append(op)
-
+        self._ops_applied.append({
+            "name": "skill_delete",
+            "arguments": {"skill_name": skill_name},
+            "valid": success,
+        })
         if success:
-            return f"Skill '{skill_name}' deleted. Repo now has {len(_shared_skill_repo)} skills."
-        else:
-            return f"Failed to delete skill '{skill_name}'. It may not exist."
+            return f"Skill '{skill_name}' deleted. Repo has {len(_shared_skill_repo)} skills."
+        return f"Failed to delete '{skill_name}'. Does not exist."
 
     def compute_reward(self) -> float:
-        """Compute composite reward for this curation step.
-
-        r = r_task + 1.0 * r_fc + 0.1 * r_cnt + 0.05 * r_comp
-        """
+        """Compute composite reward: r_task + r_fc + r_cnt + r_comp."""
         from skillos.rewards.composite import composite_reward, reward_compression, reward_function_call
 
-        # r_task: did the executor succeed?
         r_task = 1.0 if self._executor_result and self._executor_result["success"] else 0.0
+        r_fc = reward_function_call(self._ops_applied)
 
-        # r_fc: fraction of valid function calls
-        r_fc = reward_function_call(self._ops_applied, _shared_skill_repo)
-
-        # r_cnt: content quality (heuristic for now, replace with LLM judge)
-        r_cnt = 0.0
+        # Content quality via pluggable judge
         content_scores = []
         for op in self._ops_applied:
-            if op["name"] == "new_skill_insert" and op.get("valid"):
-                content = op["arguments"].get("content", "")
-                content_scores.append(judge_skill_quality_heuristic(content))
-            elif op["name"] == "skill_update" and op.get("valid"):
-                new_content = op["arguments"].get("new_content", "")
-                if new_content:
-                    content_scores.append(judge_skill_quality_heuristic(new_content))
-        if content_scores:
-            r_cnt = sum(content_scores) / len(content_scores)
+            if not op.get("valid"):
+                continue
+            content = None
+            if op["name"] == "new_skill_insert":
+                content = op["arguments"].get("content")
+            elif op["name"] == "skill_update":
+                content = op["arguments"].get("new_content")
+            if content:
+                content_scores.append(_judge.score(content))
+        r_cnt = sum(content_scores) / len(content_scores) if content_scores else 0.0
 
-        # r_comp: compression
         r_comp = reward_compression(_shared_skill_repo.total_tokens(), self._input_tokens)
 
         self.reward = composite_reward(r_task, r_fc, r_cnt, r_comp)

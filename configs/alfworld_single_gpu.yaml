@@ -28,6 +28,26 @@ lora_alpha: 32
 # Thinking mode
 enable_thinking: false
 
+# Frozen executor — generates trajectories for the curator to learn from
+# Options: heuristic (fast, no model), local, vllm, api
+executor:
+  type: local
+  model: Qwen/Qwen3-8B
+  # type: vllm
+  # base_url: http://localhost:8002/v1
+  # type: api
+  # base_url: https://api.inference.sh/v1
+
+# Content quality judge — scores curator's skill curation quality (r_cnt)
+# Options: heuristic (fast, no model), local, vllm, api
+judge:
+  type: heuristic
+  # type: vllm
+  # base_url: http://localhost:8001/v1
+  # model: Qwen/Qwen3-32B
+  # type: api
+  # base_url: https://api.inference.sh/v1
+
 # Logging
 logging_steps: 1
 report_to: wandb  # set WANDB_PROJECT=skillos

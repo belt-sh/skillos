@@ -26,6 +26,18 @@ use_lora: false
 # Thinking mode
 enable_thinking: false
 
+# Frozen executor — run on dedicated GPU via vLLM
+executor:
+  type: vllm
+  base_url: http://localhost:8002/v1
+  model: Qwen/Qwen3-8B
+
+# Content quality judge — run on dedicated GPU via vLLM (paper uses Qwen3-32B)
+judge:
+  type: vllm
+  base_url: http://localhost:8001/v1
+  model: Qwen/Qwen3-32B
+
 # Logging
 logging_steps: 1
 report_to: wandb

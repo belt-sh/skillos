@@ -118,6 +118,37 @@ Take the trained curator from research benchmark to real-world agent memory mana
 | Paper config | 16x H100 (80GB) | Full replication, 3-5 days |
 | Inference only | Any GPU 8GB+ | Run trained curator in 4-bit quantization |
 
+## Pluggable Backends
+
+Both the frozen executor and content quality judge support multiple backends. Configure via YAML:
+
+```yaml
+# Frozen executor (generates trajectories for curator to learn from)
+executor:
+  type: heuristic  # Fast, no model — pipeline validation
+  # type: local     # Local transformers model
+  # model: Qwen/Qwen3-8B
+  # type: vllm      # vLLM server on dedicated GPU
+  # base_url: http://localhost:8002/v1
+  # type: api       # Any OpenAI-compatible API
+  # base_url: https://api.inference.sh/v1
+
+# Content quality judge (r_cnt reward component)
+judge:
+  type: heuristic  # Rule-based, no model
+  # type: vllm      # Paper uses Qwen3-32B
+  # base_url: http://localhost:8001/v1
+  # model: Qwen/Qwen3-32B
+  # type: api
+  # base_url: https://api.inference.sh/v1
+```
+
+**Multi-GPU setup** (matches paper): curator trains on GPU 0, executor vLLM on GPU 1, judge vLLM on GPU 2.
+
+**Single-GPU setup**: curator trains with vLLM colocate, executor runs locally (same model, no extra VRAM), heuristic judge.
+
+**API setup**: use [inference.sh](https://inference.sh) or any OpenAI-compatible endpoint for executor and judge — train the curator locally while offloading inference.
+
 ## Stack
 
 - **[TRL](https://github.com/huggingface/trl)** — GRPOTrainer with `environment_factory` for multi-turn RL

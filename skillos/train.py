@@ -27,7 +27,7 @@ from datasets import Dataset
 from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
-from skillos.envs.curator_env import CuratorEnv
+from skillos.envs.curator_env import CuratorEnv, configure as configure_env
 
 
 def _has_vllm() -> bool:
@@ -77,6 +77,12 @@ def train(config: dict):
     if config.get("use_vllm", True) and not use_vllm:
         reason = "no CUDA" if not has_cuda else "vllm not installed"
         print(f"Note: vLLM disabled ({reason}), using native generation")
+
+    # Configure executor and judge backends
+    configure_env(
+        executor_config=config.get("executor", {"type": "heuristic"}),
+        judge_config=config.get("judge", {"type": "heuristic"}),
+    )
 
     dataset = build_dataset(num_episodes)
 
