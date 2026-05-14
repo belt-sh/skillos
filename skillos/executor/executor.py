@@ -12,7 +12,6 @@ it just generates trajectories that the curator learns from.
 
 from __future__ import annotations
 
-import json
 import re
 from abc import ABC, abstractmethod
 
@@ -25,33 +24,32 @@ class Executor(ABC):
     @abstractmethod
     def act(self, task_description: str, observation: str, admissible_actions: list[str],
             step_count: int, action_history: str, retrieved_skills: str) -> str:
-        """Choose an action given the current state.
-
-        Returns: the chosen action string.
-        """
         ...
+
+    def _build_prompt(self, task_description, observation, admissible_actions,
+                      step_count, action_history, retrieved_skills, history_length=3) -> str:
+        return ALFWORLD_EXECUTOR.format(
+            task_description=task_description,
+            retrieved_skills=retrieved_skills or "None",
+            step_count=step_count,
+            history_length=history_length,
+            action_history=action_history or "None",
+            current_step=step_count + 1,
+            current_observation=observation,
+            admissible_actions=", ".join(admissible_actions),
+        )
 
 
 class HeuristicExecutor(Executor):
-    """Picks the first admissible action. Fast, zero cost.
-
-    Won't solve many tasks but completes episodes and generates trajectories
-    that the curator can learn from. Good enough for pipeline validation.
-    """
+    """Picks the first admissible action. Fast, zero cost."""
 
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
-        if admissible_actions:
-            return admissible_actions[0]
-        return "look"
+        return admissible_actions[0] if admissible_actions else "look"
 
 
 class LocalExecutor(Executor):
-    """Frozen executor using a local model via transformers.
-
-    Loads a model (e.g. Qwen3-8B) and runs inference locally.
-    The model is never trained — just used for generation.
-    """
+    """Frozen executor using a local model via transformers."""
 
     def __init__(self, model_name: str = "Qwen/Qwen3-8B", device: str = "auto",
                  history_length: int = 3):
@@ -75,29 +73,16 @@ class LocalExecutor(Executor):
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
         self._load()
-        prompt = ALFWORLD_EXECUTOR.format(
-            task_description=task_description,
-            retrieved_skills=retrieved_skills or "None",
-            step_count=step_count,
-            history_length=self.history_length,
-            action_history=action_history or "None",
-            current_step=step_count + 1,
-            current_observation=observation,
-            admissible_actions=", ".join(admissible_actions),
+        prompt = self._build_prompt(
+            task_description, observation, admissible_actions,
+            step_count, action_history, retrieved_skills, self.history_length,
         )
         result = self._pipeline(prompt, return_full_text=False)[0]["generated_text"]
         return _parse_action(result, admissible_actions)
 
 
 class VLLMExecutor(Executor):
-    """Frozen executor calling a vLLM server.
-
-    Run the executor model on a dedicated GPU:
-        python -m vllm.entrypoints.openai.api_server \
-            --model Qwen/Qwen3-8B --port 8002
-
-    Keeps the executor GPU separate from the curator training GPU.
-    """
+    """Frozen executor calling a vLLM server."""
 
     def __init__(self, base_url: str = "http://localhost:8002/v1",
                  model: str = "Qwen/Qwen3-8B", history_length: int = 3):
@@ -105,46 +90,19 @@ class VLLMExecutor(Executor):
         self.model = model
         self.history_length = history_length
 
-    def _call(self, prompt: str) -> str:
-        import urllib.request
-        body = json.dumps({
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 256,
-            "temperature": 0.7,
-        }).encode()
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
-
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
-        prompt = ALFWORLD_EXECUTOR.format(
-            task_description=task_description,
-            retrieved_skills=retrieved_skills or "None",
-            step_count=step_count,
-            history_length=self.history_length,
-            action_history=action_history or "None",
-            current_step=step_count + 1,
-            current_observation=observation,
-            admissible_actions=", ".join(admissible_actions),
+        from skillos.utils.http import openai_chat
+        prompt = self._build_prompt(
+            task_description, observation, admissible_actions,
+            step_count, action_history, retrieved_skills, self.history_length,
         )
-        result = self._call(prompt)
+        result = openai_chat(self.base_url, self.model, prompt, temperature=0.7)
         return _parse_action(result, admissible_actions)
 
 
 class APIExecutor(Executor):
-    """Frozen executor calling any OpenAI-compatible API.
-
-    Works with: inference.sh, OpenRouter, Together, Fireworks, etc.
-    Set SKILLOS_EXECUTOR_API_KEY and SKILLOS_EXECUTOR_BASE_URL env vars,
-    or pass them directly.
-    """
+    """Frozen executor calling any OpenAI-compatible API."""
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None,
                  model: str = "Qwen/Qwen3-8B", history_length: int = 3):
@@ -154,81 +112,38 @@ class APIExecutor(Executor):
         self.model = model
         self.history_length = history_length
 
-    def _call(self, prompt: str) -> str:
-        import urllib.request
-        body = json.dumps({
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 256,
-            "temperature": 0.7,
-        }).encode()
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
-
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
-        prompt = ALFWORLD_EXECUTOR.format(
-            task_description=task_description,
-            retrieved_skills=retrieved_skills or "None",
-            step_count=step_count,
-            history_length=self.history_length,
-            action_history=action_history or "None",
-            current_step=step_count + 1,
-            current_observation=observation,
-            admissible_actions=", ".join(admissible_actions),
+        from skillos.utils.http import openai_chat
+        prompt = self._build_prompt(
+            task_description, observation, admissible_actions,
+            step_count, action_history, retrieved_skills, self.history_length,
         )
-        result = self._call(prompt)
+        result = openai_chat(self.base_url, self.model, prompt, temperature=0.7, api_key=self.api_key)
         return _parse_action(result, admissible_actions)
 
 
-# --- Helpers ---
-
 def _parse_action(model_output: str, admissible_actions: list[str]) -> str:
-    """Parse action from model output.
-
-    The paper's executor prompt uses <action>...</action> tags.
-    Falls back to matching against admissible actions.
-    """
-    # Try <action> tags first
+    """Parse action from model output. Paper uses <action>...</action> tags."""
     match = re.search(r"<action>\s*(.*?)\s*</action>", model_output, re.DOTALL)
     if match:
         action = match.group(1).strip()
-        # Exact match
         if action in admissible_actions:
             return action
-        # Fuzzy: find closest
         action_lower = action.lower()
         for a in admissible_actions:
             if a.lower() == action_lower:
                 return a
 
-    # Fallback: check if any admissible action appears in the output
     for a in admissible_actions:
         if a in model_output:
             return a
 
-    # Last resort: first admissible action
     return admissible_actions[0] if admissible_actions else "look"
 
 
 def create_executor(config: dict) -> Executor:
-    """Create an executor from config.
-
-    Config examples:
-        {"type": "heuristic"}
-        {"type": "local", "model": "Qwen/Qwen3-8B"}
-        {"type": "vllm", "base_url": "http://localhost:8002/v1"}
-        {"type": "api", "base_url": "https://api.inference.sh/v1", "api_key": "..."}
-    """
+    """Create an executor from config."""
     executor_type = config.get("type", "heuristic")
 
     if executor_type == "heuristic":

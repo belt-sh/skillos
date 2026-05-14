@@ -7,9 +7,6 @@ Paper weights: λ_f=1.0, λ_u=0.1, λ_c=0.05
 
 from __future__ import annotations
 
-import json
-import re
-
 
 def reward_task(env_rewards: list[float], skip_first: bool = True) -> float:
     """Average success rate over tasks in a group, skipping first (empty repo).
@@ -36,7 +33,7 @@ def reward_function_call(ops: list[dict], skill_repo=None) -> float:
 
 
 def reward_compression(repo_tokens: int, input_tokens: int) -> float:
-    """Compression reward — penalizes large skill repos relative to input.
+    """Compression reward. Penalizes large skill repos relative to input.
 
     r_comp = 1 - |S_i| / |χ_i|
     """
@@ -44,21 +41,6 @@ def reward_compression(repo_tokens: int, input_tokens: int) -> float:
         return 1.0
     return max(0.0, 1.0 - repo_tokens / input_tokens)
 
-
-def reward_content_quality(judge_response: str) -> float:
-    """Parse judge response to get content quality score.
-
-    r_cnt = 1.0 if VALID else 0.0 (binary from judge)
-    """
-    try:
-        # Extract JSON from response (may be in code block)
-        json_match = re.search(r"\{[^}]+\}", judge_response, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-            return 1.0 if result.get("VALID", False) else 0.0
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return 0.0
 
 
 def composite_reward(

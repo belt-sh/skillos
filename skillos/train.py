@@ -84,10 +84,11 @@ def train(config: dict):
         judge_config=config.get("judge", {"type": "heuristic"}),
     )
 
+    output_dir = config.get("output_dir", "./output/curator")
     dataset = build_dataset(num_episodes)
 
     grpo_kwargs = dict(
-        output_dir=config.get("output_dir", "./output/curator"),
+        output_dir=output_dir,
         num_train_epochs=config.get("epochs", 1),
         per_device_train_batch_size=config.get("batch_size", 1),
         gradient_accumulation_steps=config.get("gradient_accumulation_steps", 8),
@@ -134,8 +135,8 @@ def train(config: dict):
     )
 
     trainer.train()
-    trainer.save_model(config.get("output_dir", "./output/curator"))
-    print(f"Curator model saved to {config.get('output_dir', './output/curator')}")
+    trainer.save_model(output_dir)
+    print(f"Curator model saved to {output_dir}")
 
 
 def main():
