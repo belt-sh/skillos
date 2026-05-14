@@ -1,0 +1,32 @@
+# SkillOS ALFWorld training — multi GPU (matches paper config)
+#
+# Paper: 16x H100, batch=32, num_generations=8, 60 steps, ~3 days
+# Usage: accelerate launch -m skillos.train --config configs/alfworld_multi_gpu.yaml
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-multi-gpu
+
+# Training — match paper hyperparameters (Table 4)
+epochs: 1
+num_episodes: 3553
+batch_size: 4
+gradient_accumulation_steps: 8  # effective batch = 32 (4 * 8)
+learning_rate: 1.0e-6
+num_generations: 8  # match paper GRPO group size
+max_completion_length: 4096
+max_prompt_length: 16384
+temperature: 1.0
+
+# vLLM — server mode for multi-GPU, dedicate GPU(s) to inference
+use_vllm: true
+vllm_mode: server
+
+# No LoRA — full fine-tune with enough VRAM
+use_lora: false
+
+# Thinking mode
+enable_thinking: false
+
+# Logging
+logging_steps: 1
+report_to: wandb

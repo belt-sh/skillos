@@ -1,0 +1,34 @@
+# SkillOS ALFWorld training — single GPU (RTX 6000 Pro 96GB)
+#
+# Paper used: 16x H100, batch=32, num_generations=8, 60 steps, ~3 days
+# This config: 1x RTX 6000 Pro, smaller batch, LoRA, ~slower but validates pipeline
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-single-gpu
+
+# Training
+epochs: 1
+num_episodes: 3553  # ALFWorld training split size
+batch_size: 1
+gradient_accumulation_steps: 8  # effective batch = 8
+learning_rate: 1.0e-6
+num_generations: 4  # paper uses 8, reduced for single GPU VRAM
+max_completion_length: 4096
+max_prompt_length: 16384
+temperature: 1.0
+
+# vLLM — colocate mode shares GPU between inference and training
+use_vllm: true
+vllm_mode: colocate
+
+# LoRA — required for single GPU with 8B model
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+
+# Thinking mode
+enable_thinking: false
+
+# Logging
+logging_steps: 1
+report_to: wandb  # set WANDB_PROJECT=skillos
