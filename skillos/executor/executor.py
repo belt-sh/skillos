@@ -5,6 +5,7 @@ Pluggable backends:
 - LocalExecutor: runs a local model via transformers (same or separate GPU)
 - VLLMExecutor: calls a vLLM server (dedicated inference GPU)
 - APIExecutor: calls any OpenAI-compatible API (remote executor)
+- InfshExecutor: calls an inference.sh app via the inferencesh SDK
 
 Paper uses frozen Qwen3-8B as executor. The executor is NEVER trained —
 it just generates trajectories that the curator learns from.
@@ -12,10 +13,33 @@ it just generates trajectories that the curator learns from.
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
 
 from skillos.curator.prompts import ALFWORLD_EXECUTOR
+
+
+def _log_infsh_task(role: str, app: str, task_id: str) -> None:
+    """Append task IDs to a NDJSON log so we can query `belt task cost` later.
+
+    Path overridable via SKILLOS_INFSH_TASKLOG (default: ./output/infsh_tasks.jsonl).
+    """
+    path = os.environ.get("SKILLOS_INFSH_TASKLOG", "./output/infsh_tasks.jsonl")
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        import json
+        import time
+        with open(path, "a") as f:
+            f.write(json.dumps({
+                "ts": time.time(),
+                "role": role,
+                "app": app,
+                "task_id": task_id,
+            }) + "\n")
+    except Exception:
+        # Logging is best-effort — never fail a rollout because of it.
+        pass
 
 
 class Executor(ABC):
@@ -123,6 +147,56 @@ class APIExecutor(Executor):
         return _parse_action(result, admissible_actions)
 
 
+class InfshExecutor(Executor):
+    """Frozen executor calling an inference.sh app (e.g. openrouter/qwen3-8b).
+
+    Uses the inferencesh Python SDK. Stateless tasks: each act() is a fresh
+    client.tasks.run() call.
+    """
+
+    def __init__(self, app: str = "openrouter/qwen3-8b", api_key: str | None = None,
+                 history_length: int = 3, temperature: float = 0.7,
+                 max_tokens: int = 256, infra: str = "cloud", variant: str = "default",
+                 setup: dict | None = None):
+        from inferencesh import inference
+        from skillos.utils.infsh_auth import resolve_infsh_api_key
+        self.app = app
+        self.api_key = resolve_infsh_api_key(api_key)
+        self.client = inference(api_key=self.api_key)
+        self.history_length = history_length
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.infra = infra
+        self.variant = variant
+        self.setup = setup or {}
+
+    def act(self, task_description, observation, admissible_actions,
+            step_count, action_history, retrieved_skills) -> str:
+        prompt = self._build_prompt(
+            task_description, observation, admissible_actions,
+            step_count, action_history, retrieved_skills, self.history_length,
+        )
+        params = {
+            "app": self.app,
+            "infra": self.infra,
+            "variant": self.variant,
+            "input": {
+                "text": prompt,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            },
+        }
+        if self.setup:
+            params["setup"] = self.setup
+        result = self.client.tasks.run(params)
+        task_id = (result or {}).get("id") or ""
+        if task_id:
+            _log_infsh_task("executor", self.app, task_id)
+        output = (result or {}).get("output") or {}
+        text = output.get("response", "") if isinstance(output, dict) else ""
+        return _parse_action(text, admissible_actions)
+
+
 def _parse_action(model_output: str, admissible_actions: list[str]) -> str:
     """Parse action from model output. Paper uses <action>...</action> tags."""
     match = re.search(r"<action>\s*(.*?)\s*</action>", model_output, re.DOTALL)
@@ -166,6 +240,17 @@ def create_executor(config: dict) -> Executor:
             api_key=config.get("api_key"),
             model=config.get("model", "Qwen/Qwen3-8B"),
             history_length=config.get("history_length", 3),
+        )
+    elif executor_type == "infsh":
+        return InfshExecutor(
+            app=config.get("app", "openrouter/qwen3-8b"),
+            api_key=config.get("api_key"),
+            history_length=config.get("history_length", 3),
+            temperature=config.get("temperature", 0.7),
+            max_tokens=config.get("max_tokens", 256),
+            infra=config.get("infra", "cloud"),
+            variant=config.get("variant", "default"),
+            setup=config.get("setup"),
         )
     else:
         raise ValueError(f"Unknown executor type: {executor_type}")

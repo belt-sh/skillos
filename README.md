@@ -84,6 +84,8 @@ executor:
   # base_url: http://localhost:8002/v1
   # type: api       # Any OpenAI-compatible API
   # base_url: https://api.inference.sh/v1
+  # type: infsh     # inference.sh app via the inferencesh Python SDK
+  # app: openrouter/qwen3-8b
 
 # Content quality judge (r_cnt reward component, paper uses Qwen3-32B)
 judge:
@@ -93,6 +95,8 @@ judge:
   # model: Qwen/Qwen3-32B
   # type: api
   # base_url: https://api.inference.sh/v1
+  # type: infsh
+  # app: openrouter/qwen3-32b
 ```
 
 | Setup | Curator | Executor | Judge |
@@ -100,7 +104,24 @@ judge:
 | Pipeline validation | CPU/small GPU | heuristic | heuristic |
 | Single GPU | vLLM colocate + LoRA | local (same model) | heuristic |
 | Multi-GPU (paper) | GPU 0 | vLLM on GPU 1 | vLLM on GPU 2 |
-| API-offloaded | local GPU | inference.sh API | inference.sh API |
+| API-offloaded | local GPU | [inference.sh](https://inference.sh) API | [inference.sh](https://inference.sh) API |
+
+### Running executor + judge on inference.sh
+
+Train the curator locally while the frozen executor and content judge run on
+[inference.sh](https://inference.sh) — frees 100% of local VRAM for the model being trained.
+
+```bash
+# One-time: stash your inference.sh API key (managed by the belt CLI: https://belt.sh)
+belt login --key <YOUR_INFERENCE_SH_KEY>
+
+# Paper-faithful: Qwen3-8B executor + Qwen3-32B judge via the inferencesh SDK
+python -m skillos.train --config configs/alfworld_paper.yaml
+```
+
+Key resolution order: explicit `api_key` in config → `INFSH_API_KEY` env var →
+`INFERENCESH_API_KEY` env var → `~/.inferencesh/config.json` (written by `belt
+login`) → `.env` file in the project root. Whatever you prefer.
 
 ## Roadmap
 

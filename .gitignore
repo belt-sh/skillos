@@ -10,3 +10,8 @@ wandb/
 *.safetensors
 *.bin
 .venv/
+.venv-vllm/
+tmp
+.env
+.env.*
+!.env.example
