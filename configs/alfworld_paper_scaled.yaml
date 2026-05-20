@@ -1,0 +1,53 @@
+# Scaled-down paper run — same hyperparams as alfworld_paper.yaml, fewer episodes.
+# Validates Qwen3-8B curator + inference.sh executor/judge end-to-end with a
+# real gradient before committing to the multi-day full run.
+#
+# Effective batch (paper): per_device × grad_accum = 2 × 16 = 32 prompts /
+# optimizer step × num_generations 8 = 256 rollouts / optimizer step.
+# That matches the paper while letting per-device batch up to 2 because the
+# 8B + LoRA + grad-checkpoint peak is only 25 GB on a 95 GB GPU at batch=1.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-paper-scaled
+
+epochs: 1
+num_episodes: 64                  # 2 optimizer steps at effective batch 32
+batch_size: 2                     # 2 prompts × 8 generations = 16 concurrent rollouts
+gradient_accumulation_steps: 16   # 2 × 16 = 32 (paper effective batch)
+learning_rate: 1.0e-6
+num_generations: 8                # paper GRPO group size
+max_completion_length: 4096       # paper value — curator skill payloads can be long markdown
+temperature: 1.0
+beta: 0.001                       # paper KL coefficient (GRPO term in TRL = `beta`)
+
+use_vllm: false
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+# Frozen executor — remote inference.sh
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.7
+  max_tokens: 256
+
+# Content quality judge — remote inference.sh
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 1                     # only ~2 opt steps, save each
+save_total_limit: 3
+
+wandb_run_name: alfworld-paper-scaled

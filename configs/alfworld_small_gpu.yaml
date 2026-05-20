@@ -1,0 +1,50 @@
+# Small-model validation config — Qwen3-0.6B everywhere
+# Validates the full GRPO loop + ALFWorld + composite reward end-to-end.
+# Tiny enough to iterate on batch sizes / num_generations / grad_accum quickly.
+#
+# Expectation: success rate stays low (0.6B is dumb), but the loop runs and
+# gradients flow. Used to tune throughput before committing to Qwen3-8B.
+
+model: Qwen/Qwen3-0.6B
+output_dir: ./output/alfworld-small-gpu
+
+# Training — start small, scale up
+epochs: 1
+num_episodes: 8        # bump up once stable
+batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-6
+num_generations: 8     # paper uses 8 — need enough rollouts for reward variance
+max_completion_length: 512
+temperature: 1.0
+
+# Native HF generation — vLLM 0.11/0.12 are incompatible with transformers 5 at
+# runtime; revisit when TRL relaxes its env-factory check or vLLM ships a
+# transformers-5-compatible build.
+use_vllm: false
+
+# LoRA — much faster updates, smaller checkpoints
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+
+enable_thinking: false
+
+# Frozen executor — real LLM inference so trajectories aren't trivial
+executor:
+  type: local
+  model: Qwen/Qwen3-0.6B
+  device: cuda
+
+# Content quality judge — heuristic for now, swap to local/api later
+judge:
+  type: heuristic
+
+# Logging — set WANDB_ENTITY/WANDB_PROJECT before launch (defaults: okaris/skillos)
+logging_steps: 1
+report_to: wandb
+
+# Checkpointing — small runs only do ~8 optimizer steps, so save often
+save_strategy: steps
+save_steps: 2
+save_total_limit: 3

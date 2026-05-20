@@ -1,0 +1,58 @@
+# SkillOS paper-scale training on a single GPU.
+#
+# Local GPU runs ONLY the curator (model being trained). Frozen executor and
+# content judge live on remote API endpoints, so 100% of VRAM is available for
+# training.
+#
+# Paper hyperparameters (Table 4):
+#   per_device_train_batch_size × grad_accum_steps  = 32 prompts per optimizer update
+#   num_generations                                 = 8 rollouts per prompt
+#   → 32 × 8 = 256 rollouts per optimizer update    (paper effective batch)
+#
+# On 1× RTX 6000 Pro we keep per_device_train_batch_size=1 and stretch
+# grad_accum to 32. Each accumulation step only holds 8 rollouts in memory.
+# Use LoRA + grad checkpointing to keep peak VRAM bounded.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-paper
+
+# Training — paper-equivalent effective batch through gradient accumulation
+epochs: 1
+num_episodes: 3553                # full ALFWorld training split
+batch_size: 1                     # prompts per device per forward
+gradient_accumulation_steps: 32   # 1 × 32 = 32 prompts per optimizer step (paper)
+learning_rate: 1.0e-6
+num_generations: 8                # paper GRPO group size
+max_completion_length: 4096
+temperature: 1.0
+
+# vLLM colocate is gated by the TRL/vLLM/transformers compatibility window.
+# Once that lands, flip use_vllm: true to overlap rollout + train on one GPU.
+use_vllm: false
+
+# LoRA — required to fit 8B + grads + activations on 96GB alongside generation
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh app (frees local GPU for training)
+# Set INFSH_API_KEY in the environment (or pass api_key: here).
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.7
+  max_tokens: 256
+
+# Content quality judge — REMOTE inference.sh app (paper uses Qwen3-32B)
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+
+# Logging — set WANDB_ENTITY/WANDB_PROJECT before launch (defaults: okaris/skillos)
+logging_steps: 1
+report_to: wandb

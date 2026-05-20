@@ -61,7 +61,7 @@ def reward_func(environments: list[CuratorEnv], **kwargs) -> list[float]:
     """Compute composite reward from each curator environment."""
     rewards = []
     for env in environments:
-        env.compute_reward()
+        env._compute_reward()
         rewards.append(env.reward)
     return rewards
 
@@ -78,14 +78,24 @@ def train(config: dict):
         reason = "no CUDA" if not has_cuda else "vllm not installed"
         print(f"Note: vLLM disabled ({reason}), using native generation")
 
-    # Configure executor and judge backends
+    # Configure executor, judge, and GRPO group size (so the env can share
+    # one frozen-executor trajectory across the N curator samples per prompt).
     configure_env(
         executor_config=config.get("executor", {"type": "heuristic"}),
         judge_config=config.get("judge", {"type": "heuristic"}),
+        num_generations=config.get("num_generations", 4),
     )
 
     output_dir = config.get("output_dir", "./output/curator")
     dataset = build_dataset(num_episodes)
+
+    # Wandb defaults (override via env vars or `wandb_*` config keys)
+    import os
+    if config.get("report_to") == "wandb":
+        os.environ.setdefault("WANDB_PROJECT", config.get("wandb_project", "skillos"))
+        os.environ.setdefault("WANDB_ENTITY", config.get("wandb_entity", "okaris"))
+        run_name = config.get("wandb_run_name") or output_dir.rsplit("/", 1)[-1]
+        os.environ.setdefault("WANDB_NAME", run_name)
 
     grpo_kwargs = dict(
         output_dir=output_dir,
@@ -97,10 +107,15 @@ def train(config: dict):
         generation_batch_size=config.get("generation_batch_size", config.get("num_generations", 4)),
         max_completion_length=config.get("max_completion_length", 4096),
         temperature=config.get("temperature", 1.0),
+        beta=config.get("beta", 0.0),  # GRPO KL coefficient (paper: 0.001)
         # Logging
         logging_steps=config.get("logging_steps", 1),
         log_completions=True,
         report_to=config.get("report_to", "none"),
+        # Checkpointing — write intermediate adapters so a crashed run doesn't lose everything
+        save_strategy=config.get("save_strategy", "steps"),
+        save_steps=config.get("save_steps", 25),
+        save_total_limit=config.get("save_total_limit", 3),
         # Chat
         chat_template_kwargs={"enable_thinking": config.get("enable_thinking", False)},
         # CPU fallback
@@ -134,9 +149,29 @@ def train(config: dict):
         environment_factory=CuratorEnv,
     )
 
-    trainer.train()
-    trainer.save_model(output_dir)
-    print(f"Curator model saved to {output_dir}")
+    try:
+        trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
+    except KeyboardInterrupt:
+        print("Interrupted — attempting to save current state…")
+
+    # Save no matter how training exited. Best-effort: even if model-card
+    # generation throws (e.g. wandb/comet stub bugs), the adapter still lands.
+    final_dir = output_dir
+    try:
+        trainer.save_model(final_dir)
+        print(f"Curator model saved to {final_dir}")
+    except Exception as e:
+        emergency_dir = f"{final_dir}-emergency"
+        print(f"save_model() raised {type(e).__name__}: {e}")
+        print(f"Falling back to direct state dump at {emergency_dir}")
+        try:
+            trainer.model.save_pretrained(emergency_dir)
+            if trainer.processing_class is not None:
+                trainer.processing_class.save_pretrained(emergency_dir)
+            print(f"Adapter rescued to {emergency_dir}")
+        except Exception as e2:
+            print(f"Emergency save also failed: {type(e2).__name__}: {e2}")
+            raise
 
 
 def main():

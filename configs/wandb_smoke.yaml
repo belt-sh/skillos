@@ -1,0 +1,40 @@
+# Tiny wandb-tracked smoke run — finishes in 2-3 min.
+# Uses Qwen3-0.6B with heuristic executor (no executor LLM inference)
+# so the entire run is dominated by curator generation + GRPO update.
+# Purpose: prove wandb logging end-to-end without burning time.
+
+model: Qwen/Qwen3-0.6B
+output_dir: ./output/wandb-smoke
+
+epochs: 1
+num_episodes: 4
+batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-6
+num_generations: 2
+max_completion_length: 256
+temperature: 1.0
+
+use_vllm: false
+
+use_lora: true
+lora_r: 8
+lora_alpha: 16
+
+enable_thinking: false
+
+# Heuristic everywhere — zero external dependencies, fastest possible loop
+executor:
+  type: heuristic
+judge:
+  type: heuristic
+
+logging_steps: 1
+report_to: wandb
+
+# Save every step on this tiny run so we always have something to point at
+save_strategy: steps
+save_steps: 1
+save_total_limit: 2
+
+wandb_run_name: wandb-smoke
