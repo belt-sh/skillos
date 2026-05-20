@@ -122,6 +122,50 @@ class SkillRepo:
         new._bm25_dirty = True
         return new
 
+    def save(self, directory: str) -> None:
+        """Persist every skill as a `<name>.md` file under `directory/`.
+
+        Mirror of how `belt` and Anthropic SKILL.md format store skills on
+        disk — one markdown file per skill, full original content (with
+        YAML frontmatter) preserved.
+        """
+        import os
+        os.makedirs(directory, exist_ok=True)
+        # Stale skills could linger if names changed; clean existing .md first.
+        for fn in os.listdir(directory):
+            if fn.endswith(".md"):
+                os.remove(os.path.join(directory, fn))
+        for name, skill in self.skills.items():
+            # Sanitize the filename — skill names can contain anything the
+            # curator emits.
+            safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:200]
+            with open(os.path.join(directory, f"{safe}.md"), "w") as f:
+                f.write(skill.content)
+
+    @classmethod
+    def load(cls, directory: str) -> SkillRepo:
+        """Load every `*.md` file under `directory/` as a skill.
+
+        Skill names come from the YAML frontmatter (canonical), not the
+        filename. Files that fail to parse are skipped quietly.
+        """
+        import os
+        repo = cls()
+        if not os.path.isdir(directory):
+            return repo
+        for fn in sorted(os.listdir(directory)):
+            if not fn.endswith(".md"):
+                continue
+            try:
+                with open(os.path.join(directory, fn)) as f:
+                    content = f.read()
+                skill = Skill.from_markdown(content)
+                repo.skills[skill.name] = skill
+            except Exception:
+                continue
+        repo._bm25_dirty = True
+        return repo
+
     def _rebuild_index(self):
         corpus = [s.searchable_text().lower().split() for s in self.skills.values()]
         if corpus:

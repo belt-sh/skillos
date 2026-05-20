@@ -156,6 +156,17 @@ def train(config: dict):
         environment_factory=CuratorEnv,
     )
 
+    # Persist the skill repo alongside every checkpoint and at final save.
+    # The adapter alone is useless at eval time — the curator's learned
+    # behavior is *what curates*, but evaluation uses the repo's skills.
+    from transformers import TrainerCallback
+    from skillos.envs import curator_env as _ce
+    class SkillRepoSaver(TrainerCallback):
+        def on_save(self, args, state, control, **kwargs):
+            ckpt = f"{args.output_dir}/checkpoint-{state.global_step}/skills"
+            _ce._shared_skill_repo.save(ckpt)
+    trainer.add_callback(SkillRepoSaver())
+
     try:
         trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     except KeyboardInterrupt:
@@ -166,7 +177,8 @@ def train(config: dict):
     final_dir = output_dir
     try:
         trainer.save_model(final_dir)
-        print(f"Curator model saved to {final_dir}")
+        _ce._shared_skill_repo.save(f"{final_dir}/skills")
+        print(f"Curator model + {len(_ce._shared_skill_repo)} skills saved to {final_dir}")
     except Exception as e:
         emergency_dir = f"{final_dir}-emergency"
         print(f"save_model() raised {type(e).__name__}: {e}")
@@ -175,7 +187,8 @@ def train(config: dict):
             trainer.model.save_pretrained(emergency_dir)
             if trainer.processing_class is not None:
                 trainer.processing_class.save_pretrained(emergency_dir)
-            print(f"Adapter rescued to {emergency_dir}")
+            _ce._shared_skill_repo.save(f"{emergency_dir}/skills")
+            print(f"Adapter + skills rescued to {emergency_dir}")
         except Exception as e2:
             print(f"Emergency save also failed: {type(e2).__name__}: {e2}")
             raise

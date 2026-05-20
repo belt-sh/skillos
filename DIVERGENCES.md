@@ -13,16 +13,51 @@ Order matters: things at the top affect results most.
 
 ---
 
-## 1. Single GPU, not 16× H100
+## 1. Single GPU, not 16× H100 — *and* LoRA, not full fine-tune
 
-- **Paper:** 16× H100, distributed training, full fine-tune of Qwen3-8B
-- **Ours:** 1× RTX 6000 Pro Blackwell (96 GB), LoRA fine-tune (r=32, all-linear)
+This is the biggest deviation. Worth splitting into two parts.
+
+### 1a. Hardware
+- **Paper:** 16× H100, distributed training
+- **Ours:** 1× RTX 6000 Pro Blackwell (96 GB)
 - **Why:** hardware available
-- **Impact:** Same effective batch (32 via gradient accumulation), but LoRA caps
-  the trainable parameter count to ~87 M / ~8 B (1.05%). May limit how much the
-  curator can change behavior vs full FT. Paper does not report LoRA ablations,
-  so the gap is unquantified.
 - **Status:** `forced`
+
+### 1b. LoRA r=32 (instead of paper's full fine-tune)
+- **Paper:** full fine-tune of Qwen3-8B, all 8B parameters update
+- **Ours:** LoRA r=32 on all-linear, ~87M trainable parameters (1.05% of model)
+- **Why:** full FT on a single 96 GB GPU at paper effective batch (32 × 8
+  rollouts) requires roughly 180 GB (bf16 + Adam fp32 + ref model + KV cache
+  for 16 in-flight rollouts at max_completion=4096). Even with 8-bit Adam and
+  bf16 master weights it's ~100-120 GB, still over the budget.
+- **Impact:** This is the biggest blocker to claiming a paper-faithful result.
+  The paper's headline number (RL-trained 8B beats Gemini-2.5-Pro at skill
+  curation) is from updating all 8B params. LoRA caps how much behavior the
+  curator can acquire — particularly important because the paper observes
+  emergent meta-skills late in training that almost certainly require deeper
+  parameter changes than r=32 can express. We can train and watch the loss
+  decline, but we cannot claim "matched the paper" with LoRA alone.
+- **Status:** `forced` until either (a) we add 8-bit Adam + CPU optimizer
+  offload to squeeze full FT onto 96 GB at the cost of ~2× wall time, or
+  (b) we move to 8× H100 where full FT fits trivially.
+
+### Mitigations on the table (single-GPU path)
+- **CPU-offload optimizer (DeepSpeed ZeRO-2 with offload_optimizer):** brings
+  full-FT peak from ~180 GB to ~70-80 GB. Slows training ~1.5-2×.
+- **8-bit Adam (bitsandbytes):** halves optimizer memory. Often combined with
+  CPU offload for further savings.
+- **`beta: 0` (drop the KL reference model):** frees 16 GB but is itself a
+  divergence (see audit checklist — paper uses 0.001).
+- **Smaller `max_completion_length`:** would free 15-20 GB of KV cache but
+  truncates curator skill content, breaking r_fc and r_cnt.
+
+### Migration path to 8× H100
+- LoRA adapter (~350 MB) and checkpoints (`output/<run>/checkpoint-N/`) are
+  portable. scp to the new box, drop under the same `output_dir`, set
+  `resume_from_checkpoint` in the config.
+- Use `configs/alfworld_multi_gpu.yaml` with `accelerate launch -m skillos.train`.
+- On 8× H100, full FT fits trivially (640 GB aggregate), vLLM compat issues
+  may also resolve, and per-step wall time drops ~8×.
 
 ## 2. vLLM disabled
 
@@ -100,7 +135,25 @@ Order matters: things at the top affect results most.
 - **Status:** `temporary` — implement per-rollout local op buffers when it
   starts mattering
 
-## 8. Save strategy
+## 8. Reasoning + WebShop benchmarks not built
+
+- **Paper:** trains and evaluates on three domains — ALFWorld, DeepMath-103K
+  + GPQA-Diamond (reasoning), WebShop. Reports Tables 1-3 across all of them.
+- **Ours:** only ALFWorld is wired. Reasoning + WebShop have:
+  - prompt templates in `curator/prompts.py` (REASONING_EXECUTOR,
+    REASONING_CORRECTNESS_JUDGE)
+  - placeholder `data/grouping.py::group_reasoning_tasks`
+  - declared extras in `pyproject.toml` (`sympy` for reasoning,
+    `stable-baselines3` for webshop)
+  - **no environment wrappers, no training configs, no dataset loaders**
+- **Why:** scope — reproducing ALFWorld first as v0.1. Reasoning + WebShop
+  scheduled for v0.2 in the README roadmap.
+- **Impact:** Cannot reproduce the paper's cross-domain transfer claim
+  ("+13.3% on ALFWorld from reasoning training") or the three-benchmark
+  averages. Per-domain ALFWorld numbers are still comparable.
+- **Status:** `temporary` (v0.2 work)
+
+## 9. Save strategy
 
 - **Paper:** doesn't specify checkpointing cadence
 - **Ours:** `save_strategy: steps`, `save_steps: 25`, `save_total_limit: 3`

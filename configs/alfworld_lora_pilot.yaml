@@ -1,0 +1,51 @@
+# LoRA pilot: 10 optimizer steps at paper effective batch.
+# Goal: see whether the learning trend (loss, reward, tools/call_frequency)
+# stabilizes paper-like with LoRA r=32 on a single 96 GB GPU.
+#
+# Effective batch (paper): per_device × grad_accum = 2 × 16 = 32 prompts.
+# num_generations = 8 → 256 rollouts per optimizer step.
+# 320 episodes / 32 effective batch = 10 optimizer steps. Wall ~3-5 hours.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-lora-pilot
+
+epochs: 1
+num_episodes: 320                 # 10 optimizer steps at effective batch 32
+batch_size: 2
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-6
+num_generations: 8
+max_completion_length: 4096       # paper
+temperature: 1.0
+beta: 0.001                       # paper KL coefficient
+
+use_vllm: false
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.7
+  max_tokens: 256
+
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+
+logging_steps: 1
+report_to: wandb
+
+# Save every 2 opt steps so we can reload the repo + adapter for benchmarking
+save_strategy: steps
+save_steps: 2
+save_total_limit: 5
+
+wandb_run_name: alfworld-lora-pilot
