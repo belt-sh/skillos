@@ -11,7 +11,14 @@ wandb/
 *.bin
 .venv/
 .venv-vllm/
+.venv-hrm/
 tmp
 .env
 .env.*
 !.env.example
+
+# experiments — keep configs/scripts, ignore downloaded weights + cloned upstream repos + logs
+experiments/**/HRM-Text-1B/
+experiments/**/HRM-Text-repo/
+experiments/**/*.log
+.claude/

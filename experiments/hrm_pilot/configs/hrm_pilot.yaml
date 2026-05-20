@@ -1,0 +1,69 @@
+# HRM-Text-1B SkillOS pilot
+#
+# Two-phase training:
+#  Phase 1 (SFT warmup): teach base HRM-Text the curator tool-call format,
+#    ~50-200 (curator_input -> tool_calls + skill) pairs replayed from a prior
+#    Qwen3-8B pilot's rollouts.jsonl. Without this, GRPO has no signal to start
+#    from -- base model can't emit <tool_call>...</tool_call> at all.
+#  Phase 2 (GRPO): same SkillOS recipe as alfworld_lora_pilot.yaml.
+#
+# This file describes phase 2. Phase 1 has its own script.
+
+model: ./experiments/hrm_pilot/HRM-Text-1B   # local path (custom model class via trust_remote_code)
+trust_remote_code: true
+output_dir: ./output/hrm-pilot
+
+# HRM-Text condition prefix: synth,cot -> bidirectional prefix block before
+# the curator instruction. Reasoning + chain-of-thought style.
+# Tokens: <|quad_end|><|object_ref_end|>
+hrm_condition: "synth,cot"
+
+# PrefixLM mask requires token_type_ids on the prompt. Set by train_hrm.py
+# automatically; this flag just makes the choice explicit.
+hrm_prefix_lm: true
+
+epochs: 1
+num_episodes: 320                 # same 10 opt steps at effective batch 32
+batch_size: 2
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-5             # LoRA-friendly, 50x paper Qwen rate (HRM is 1B not 8B)
+num_generations: 8
+max_completion_length: 4096       # HRM-Text trained at 4096, don't go higher
+temperature: 1.0
+beta: 0.0                         # paper: "we discard the KL term" -- correctness fix
+
+use_vllm: false                   # HRM not yet a vLLM model; SDPA on training side
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+# HRM uses gated attention -- target_modules="all-linear" should find:
+#   z_proj, q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+# Verify after smoke test; fall back to explicit list if PEFT can't auto-find.
+
+enable_thinking: false
+
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.7
+  max_tokens: 256
+  context_size: 8192
+
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 2
+save_total_limit: 5
+
+wandb_run_name: hrm-text-pilot
+wandb_project: skillos-hrm
