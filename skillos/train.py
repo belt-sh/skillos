@@ -167,6 +167,19 @@ def train(config: dict):
             _ce._shared_skill_repo.save(ckpt)
     trainer.add_callback(SkillRepoSaver())
 
+    # Per-opt-step observability: reset rollout counters + (re)start heartbeat.
+    rollouts_per_step = (
+        config.get("batch_size", 1)
+        * config.get("gradient_accumulation_steps", 8)
+        * config.get("num_generations", 4)
+    )
+    class StepBoundaryObserver(TrainerCallback):
+        def on_train_begin(self, args, state, control, **kwargs):
+            _ce.set_step_expected_rollouts(rollouts_per_step)
+        def on_step_begin(self, args, state, control, **kwargs):
+            _ce.set_step_expected_rollouts(rollouts_per_step)
+    trainer.add_callback(StepBoundaryObserver())
+
     try:
         trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     except KeyboardInterrupt:

@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import os
+import sys
 import threading
+import time
 from collections import deque
 
 from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE
@@ -73,6 +76,29 @@ _judge_cache: dict[str, float] = {}
 # Instances, in creation order. Slot index used to derive group_id.
 _instances: list = []
 
+# ---------------------------------------------------------------------------
+# Observability state (per-rollout logging, append-only artifacts, heartbeat)
+# ---------------------------------------------------------------------------
+
+_obs_lock = threading.Lock()
+_rollouts_completed = 0          # all-time rollouts that completed _compute_reward
+_step_rollouts_completed = 0     # rollouts since last step boundary (reset on step landing)
+_step_rollouts_expected = 0      # batch_size * num_generations
+_step_reward_sum = 0.0
+_step_reward_count = 0
+_rollouts_inflight = 0           # rollouts past reset() that haven't hit _compute_reward yet
+_oldest_inflight_started_at: float | None = None
+
+_log_every_n_rollouts = int(os.environ.get("SKILLOS_LOG_EVERY", "8"))
+_heartbeat_interval_s = float(os.environ.get("SKILLOS_HEARTBEAT_S", "60"))
+
+_artifacts_dir = os.environ.get("SKILLOS_ARTIFACTS_DIR", "output/skillos-live")
+_rollouts_jsonl_path = os.path.join(_artifacts_dir, "rollouts.jsonl")
+_skills_live_dir = os.path.join(_artifacts_dir, "skills")
+
+_heartbeat_started = False
+_pilot_start_time = time.time()
+
 
 # ---------------------------------------------------------------------------
 # Public configuration entrypoint
@@ -95,6 +121,174 @@ def reset_shared_state() -> None:
     """Reset shared state at the start of a new task group (paper §3.2.1)."""
     global _shared_skill_repo
     _shared_skill_repo = SkillRepo()
+
+
+# ---------------------------------------------------------------------------
+# Observability helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_artifacts_dir() -> None:
+    os.makedirs(_artifacts_dir, exist_ok=True)
+    os.makedirs(_skills_live_dir, exist_ok=True)
+
+
+def _append_rollout_record(record: dict) -> None:
+    """Append a single rollout outcome to rollouts.jsonl (crash-safe)."""
+    try:
+        _ensure_artifacts_dir()
+        with open(_rollouts_jsonl_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+            f.flush()
+    except Exception as e:
+        print(f"[obs] rollout-jsonl write failed: {e}", file=sys.stderr)
+
+
+def _dump_skills_live() -> None:
+    """Persist current skill repo to disk *now* (not just on TRL save_steps).
+
+    Crash-safe in the sense that whatever skills the LLM has paid to generate
+    so far survive a mid-step crash.
+    """
+    try:
+        _ensure_artifacts_dir()
+        _shared_skill_repo.save(_skills_live_dir)
+    except Exception as e:
+        print(f"[obs] live-skill-dump failed: {e}", file=sys.stderr)
+
+
+def _wandb_log_safe(payload: dict) -> None:
+    """Log to wandb if a run is active; never raise."""
+    try:
+        import wandb
+        if wandb.run is not None:
+            wandb.log(payload, commit=False)
+    except Exception:
+        pass
+
+
+def _start_heartbeat_once() -> None:
+    """Spin up the heartbeat daemon thread on first call (idempotent)."""
+    global _heartbeat_started
+    with _obs_lock:
+        if _heartbeat_started:
+            return
+        _heartbeat_started = True
+
+    def _heartbeat_loop() -> None:
+        import torch
+        while True:
+            time.sleep(_heartbeat_interval_s)
+            try:
+                with _obs_lock:
+                    completed = _rollouts_completed
+                    step_done = _step_rollouts_completed
+                    step_expected = _step_rollouts_expected
+                    inflight = _rollouts_inflight
+                    oldest_age = (
+                        time.time() - _oldest_inflight_started_at
+                        if _oldest_inflight_started_at else 0.0
+                    )
+                    mean_reward = (
+                        _step_reward_sum / _step_reward_count
+                        if _step_reward_count else 0.0
+                    )
+                uptime_s = int(time.time() - _pilot_start_time)
+                gpu_str = ""
+                if torch.cuda.is_available():
+                    mem_gb = torch.cuda.memory_allocated() / 1024**3
+                    gpu_str = f" gpu={mem_gb:.1f}GB"
+                print(
+                    f"[heartbeat] uptime={uptime_s//60}m "
+                    f"step_rollouts={step_done}/{step_expected} "
+                    f"total_rollouts={completed} "
+                    f"in_flight={inflight} "
+                    f"oldest_inflight={oldest_age:.0f}s "
+                    f"mean_reward={mean_reward:.3f}{gpu_str}",
+                    flush=True,
+                )
+                _wandb_log_safe({
+                    "live/rollouts_in_step": step_done,
+                    "live/total_rollouts": completed,
+                    "live/in_flight": inflight,
+                    "live/oldest_inflight_s": oldest_age,
+                    "live/step_mean_reward": mean_reward,
+                })
+            except Exception as e:
+                print(f"[heartbeat] crashed once: {e}", file=sys.stderr)
+
+    t = threading.Thread(target=_heartbeat_loop, daemon=True, name="skillos-heartbeat")
+    t.start()
+
+
+def _on_rollout_start(slot: int) -> None:
+    """Marker that a slot's reset() has finished — rollout is now in-flight."""
+    global _rollouts_inflight, _oldest_inflight_started_at
+    with _obs_lock:
+        _rollouts_inflight += 1
+        if _oldest_inflight_started_at is None or _rollouts_inflight == 1:
+            _oldest_inflight_started_at = time.time()
+
+
+def _on_rollout_complete(slot: int, reward: float, executor_result: dict | None,
+                         ops_applied: list[dict]) -> None:
+    """Record + log a completed rollout's outcome."""
+    global _rollouts_completed, _step_rollouts_completed
+    global _step_reward_sum, _step_reward_count, _rollouts_inflight
+    global _oldest_inflight_started_at
+    with _obs_lock:
+        _rollouts_completed += 1
+        _step_rollouts_completed += 1
+        _step_reward_sum += reward
+        _step_reward_count += 1
+        _rollouts_inflight = max(0, _rollouts_inflight - 1)
+        if _rollouts_inflight == 0:
+            _oldest_inflight_started_at = None
+        step_done = _step_rollouts_completed
+        step_expected = _step_rollouts_expected
+        completed = _rollouts_completed
+        mean_reward = _step_reward_sum / max(_step_reward_count, 1)
+
+    _append_rollout_record({
+        "ts": time.time(),
+        "slot": slot,
+        "reward": reward,
+        "success": bool(executor_result and executor_result.get("success")),
+        "steps": (executor_result or {}).get("steps"),
+        "ops": [
+            {"name": o["name"], "valid": o["valid"]} for o in ops_applied
+        ],
+        "task_description": (executor_result or {}).get("task_description"),
+    })
+
+    if step_done % _log_every_n_rollouts == 0 or step_done == step_expected:
+        print(
+            f"[rollout] step_progress={step_done}/{step_expected} "
+            f"total={completed} reward={reward:.3f} "
+            f"step_mean={mean_reward:.3f}",
+            flush=True,
+        )
+        _wandb_log_safe({
+            "rollout/reward_latest": reward,
+            "rollout/step_mean_reward": mean_reward,
+            "rollout/step_progress": step_done,
+        })
+
+
+def _reset_step_counters(expected_total: int) -> None:
+    """Called by train.py when a new opt step starts."""
+    global _step_rollouts_completed, _step_rollouts_expected
+    global _step_reward_sum, _step_reward_count
+    with _obs_lock:
+        _step_rollouts_completed = 0
+        _step_rollouts_expected = expected_total
+        _step_reward_sum = 0.0
+        _step_reward_count = 0
+
+
+def set_step_expected_rollouts(n: int) -> None:
+    """Public hook for train.py to declare batch_size × num_generations."""
+    _reset_step_counters(n)
+    _start_heartbeat_once()
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +486,7 @@ class CuratorEnv:
         future = self._get_or_submit_group_future()
         result = future.result()
         self._executor_result = result
+        _on_rollout_start(self._slot)
 
         trajectory_text = _format_trajectory(result)
         result_text = "Success" if result["success"] else "Failure"
@@ -330,6 +525,7 @@ class CuratorEnv:
             # Fire judge async right now; we'll await in compute_reward.
             self._judge_futures.append(_submit_judge(content))
         if success:
+            _dump_skills_live()
             return f"Skill '{skill_name}' created. Repo has {len(_shared_skill_repo)} skills."
         return f"Failed to create '{skill_name}'. Already exists or invalid format."
 
@@ -357,6 +553,7 @@ class CuratorEnv:
         if success and new_content:
             self._judge_futures.append(_submit_judge(new_content))
         if success:
+            _dump_skills_live()
             return f"Skill '{new_name or skill_name}' updated."
         return f"Failed to update '{skill_name}'. Does not exist."
 
@@ -376,6 +573,7 @@ class CuratorEnv:
             "valid": success,
         })
         if success:
+            _dump_skills_live()
             return f"Skill '{skill_name}' deleted. Repo has {len(_shared_skill_repo)} skills."
         return f"Failed to delete '{skill_name}'. Does not exist."
 
@@ -406,6 +604,9 @@ class CuratorEnv:
         r_comp = reward_compression(_shared_skill_repo.total_tokens(), self._input_tokens)
 
         self.reward = composite_reward(r_task, r_fc, r_cnt, r_comp)
+        _on_rollout_complete(
+            self._slot, self.reward, self._executor_result, self._ops_applied,
+        )
         return self.reward
 
     # ---- Group dispatch internals -------------------------------------
