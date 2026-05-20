@@ -127,6 +127,7 @@ class InfshJudge(Judge):
 
     def __init__(self, app: str = "openrouter/qwen3-32b", api_key: str | None = None,
                  temperature: float = 0.0, max_tokens: int = 256,
+                 context_size: int = 8192,
                  infra: str = "cloud", variant: str = "default",
                  setup: dict | None = None):
         from inferencesh import inference
@@ -136,6 +137,7 @@ class InfshJudge(Judge):
         self.client = inference(api_key=self.api_key)
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.context_size = context_size
         self.infra = infra
         self.variant = variant
         self.setup = setup or {}
@@ -150,15 +152,17 @@ class InfshJudge(Judge):
                 "text": prompt,
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
+                "context_size": self.context_size,
             },
         }
         if self.setup:
             params["setup"] = self.setup
-        result = self.client.tasks.run(params)
-        task_id = (result or {}).get("id") or ""
-        if task_id:
-            from skillos.executor.executor import _log_infsh_task
-            _log_infsh_task("judge", self.app, task_id)
+        from skillos.utils.infsh_client import run_task_resilient
+        from skillos.executor.executor import _log_infsh_task
+        result = run_task_resilient(
+            self.client, params,
+            on_task_id=lambda tid: _log_infsh_task("judge", self.app, tid),
+        )
         output = (result or {}).get("output") or {}
         text = output.get("response", "") if isinstance(output, dict) else ""
         return _parse_judge_score(text)
@@ -209,6 +213,7 @@ def create_judge(config: dict) -> Judge:
             api_key=config.get("api_key"),
             temperature=config.get("temperature", 0.0),
             max_tokens=config.get("max_tokens", 256),
+            context_size=config.get("context_size", 8192),
             infra=config.get("infra", "cloud"),
             variant=config.get("variant", "default"),
             setup=config.get("setup"),

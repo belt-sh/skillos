@@ -141,20 +141,17 @@ def _get_alfworld_env_for_group(group_id: int):
 def _score_with_cache(content: str) -> float:
     """Compute judge score with sha256 memoization.
 
-    Failures (inference.sh timeouts, malformed JSON, etc.) score as 0.0
-    rather than re-raising — a single flaky judge call must NOT crash a
-    multi-hour training step. We still log to stderr for visibility.
+    Errors are NOT swallowed — silent 0-scoring pollutes the reward signal
+    and corrupts training. The underlying client (run_task_resilient) is
+    responsible for retrying through transient inference.sh flakiness.
+    Only a true upstream outage should reach this layer and re-raise,
+    which crashes the step. Resume from the last checkpoint.
     """
-    import sys
     key = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with _judge_cache_lock:
         if key in _judge_cache:
             return _judge_cache[key]
-    try:
-        score = _judge.score(content)
-    except Exception as e:
-        print(f"[judge] {type(e).__name__}: {e} — scoring as 0", file=sys.stderr)
-        score = 0.0
+    score = _judge.score(content)
     with _judge_cache_lock:
         _judge_cache[key] = score
     return score
@@ -400,15 +397,10 @@ class CuratorEnv:
 
         r_cnt = 0.0
         if self._judge_futures:
-            scores = []
-            for f in self._judge_futures:
-                try:
-                    scores.append(f.result())
-                except Exception:
-                    # _score_with_cache already swallows judge errors, but a
-                    # belt-and-suspenders catch here keeps a broken future
-                    # from ever crashing the training step.
-                    scores.append(0.0)
+            # Let exceptions propagate — bad judge data is worse than a
+            # crash + checkpoint resume. The resilient client should have
+            # already retried up to ~100 min before giving up.
+            scores = [f.result() for f in self._judge_futures]
             r_cnt = sum(scores) / len(scores) if scores else 0.0
 
         r_comp = reward_compression(_shared_skill_repo.total_tokens(), self._input_tokens)
