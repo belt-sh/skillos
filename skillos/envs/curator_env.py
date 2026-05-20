@@ -139,12 +139,22 @@ def _get_alfworld_env_for_group(group_id: int):
 # ---------------------------------------------------------------------------
 
 def _score_with_cache(content: str) -> float:
-    """Compute judge score with sha256 memoization."""
+    """Compute judge score with sha256 memoization.
+
+    Failures (inference.sh timeouts, malformed JSON, etc.) score as 0.0
+    rather than re-raising — a single flaky judge call must NOT crash a
+    multi-hour training step. We still log to stderr for visibility.
+    """
+    import sys
     key = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with _judge_cache_lock:
         if key in _judge_cache:
             return _judge_cache[key]
-    score = _judge.score(content)
+    try:
+        score = _judge.score(content)
+    except Exception as e:
+        print(f"[judge] {type(e).__name__}: {e} — scoring as 0", file=sys.stderr)
+        score = 0.0
     with _judge_cache_lock:
         _judge_cache[key] = score
     return score
@@ -390,8 +400,16 @@ class CuratorEnv:
 
         r_cnt = 0.0
         if self._judge_futures:
-            scores = [f.result() for f in self._judge_futures]
-            r_cnt = sum(scores) / len(scores)
+            scores = []
+            for f in self._judge_futures:
+                try:
+                    scores.append(f.result())
+                except Exception:
+                    # _score_with_cache already swallows judge errors, but a
+                    # belt-and-suspenders catch here keeps a broken future
+                    # from ever crashing the training step.
+                    scores.append(0.0)
+            r_cnt = sum(scores) / len(scores) if scores else 0.0
 
         r_comp = reward_compression(_shared_skill_repo.total_tokens(), self._input_tokens)
 
