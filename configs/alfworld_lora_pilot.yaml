@@ -15,7 +15,7 @@ batch_size: 2
 gradient_accumulation_steps: 16
 learning_rate: 1.0e-6
 num_generations: 8
-max_completion_length: 4096       # paper
+max_completion_length: 8192       # 2× paper — first pilot hit 78% clipped at 4096
 temperature: 1.0
 beta: 0.001                       # paper KL coefficient
 

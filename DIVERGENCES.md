@@ -153,7 +153,25 @@ This is the biggest deviation. Worth splitting into two parts.
   averages. Per-domain ALFWorld numbers are still comparable.
 - **Status:** `temporary` (v0.2 work)
 
-## 9. Save strategy
+## 9. `max_completion_length: 8192` (LoRA pilot) instead of 4096
+
+- **Paper:** `max_completion = 4096`
+- **Ours (LoRA pilot only):** 8192 — doubled after the first pilot's step-1 stats
+  showed `completions/clipped_ratio: 0.78`, i.e. 78% of curator completions hit
+  the 4096-token cap. Most curator outputs (skill markdown + reasoning) need
+  more headroom.
+- **Why:** clipping at 78% truncates the very thing the reward function scores
+  (the skill content). Reward signal is partial-credit on truncated text → noisy
+  gradient. Doubling the cap lets the curator finish its writes.
+- **Impact:** more activation memory per opt step (longest sequences scale O(N)
+  with flash attn), slower wall time per step. Within 96 GB budget at LoRA r=32.
+  Other configs (`alfworld_paper.yaml`, `loss_check.yaml`, `debug.yaml`) still
+  use paper's 4096 — only the LoRA pilot diverges.
+- **Status:** `ablation` (pragmatic, revisit when scaling)
+
+---
+
+## 10. Save strategy
 
 - **Paper:** doesn't specify checkpointing cadence
 - **Ours:** `save_strategy: steps`, `save_steps: 25`, `save_total_limit: 3`

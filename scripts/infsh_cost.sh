@@ -29,13 +29,15 @@ echo "Sampling $count task(s) from $LOG${ROLE:+ (role=$ROLE)}…" >&2
 
 total=0
 for id in $ids; do
-  out=$(belt task cost "$id" --json 2>/dev/null || echo '{}')
-  cost=$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_cost') or d.get('cost') or d.get('total') or 0)" 2>/dev/null || echo 0)
-  printf '  %-40s %s\n' "$id" "\$$cost"
-  total=$(python3 -c "print($total + ($cost or 0))")
+  # belt task cost prints micro-cents in formatted output; "Charged:  $0.0002"
+  out=$(belt task cost "$id" 2>/dev/null || echo "")
+  dollars=$(echo "$out" | awk '/Charged:/ {gsub(/\$/,"",$2); print $2}')
+  dollars=${dollars:-0}
+  printf '  %-40s $%s\n' "$id" "$dollars"
+  total=$(python3 -c "print($total + $dollars)")
 done
 
 avg=$(python3 -c "print($total / $count if $count else 0)")
 echo
-echo "Sample total: \$$total over $count task(s)"
-echo "Avg per task: \$$avg"
+printf "Sample total: \$%.6f over %d task(s)\n" "$total" "$count"
+printf "Avg per task: \$%.6f\n" "$avg"

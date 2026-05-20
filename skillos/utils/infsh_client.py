@@ -83,8 +83,9 @@ def run_task_resilient(
     max_stream_reconnects: int = 5,
     poll_fallback_max_seconds: float = 900.0,
     poll_fallback_interval: float = 5.0,
-    max_resubmissions: int = 4,
-    resubmission_backoff_base: float = 5.0,
+    max_resubmissions: int = 10,
+    resubmission_backoff_base: float = 60.0,
+    resubmission_backoff_cap: float = 900.0,
 ) -> dict:
     """Submit + wait on an inference.sh task with aggressive retry.
 
@@ -95,8 +96,13 @@ def run_task_resilient(
     upstream flakiness instead of silently scoring 0 / dropping samples.
 
     Wall budget per call (worst case):
-        max_resubmissions × (max_stream_reconnects + poll_fallback_max_seconds)
-        ≈ 4 × (5 × 120s stream + 900s poll) = ~6000s = 100 min.
+        per-attempt: ~5 × 120s stream + 900s poll = ~1500s = 25 min
+        backoff between attempts: min(60 × 2^idx, 900s) = 60, 120, 240, 480,
+          900, 900, 900, 900, 900s (capped from idx=4 onward)
+        10 attempts: 10 × 1500s + ~5340s backoff total = ~20340s = ~5.6 hours.
+
+    That's the worst case under a sustained upstream outage. In normal flow
+    each attempt completes in seconds and backoff is irrelevant.
 
     Callers should expect long-tail latency under outage. The point is to
     eventually return a real result, since silent failure pollutes training.
@@ -107,12 +113,12 @@ def run_task_resilient(
             submission = client.tasks.run(params, wait=False)
         except Exception as e:
             last_err = e
-            time.sleep(resubmission_backoff_base * (2 ** sub_idx))
+            time.sleep(min(resubmission_backoff_base * (2 ** sub_idx), resubmission_backoff_cap))
             continue
         task_id = submission.get("id") or submission.get("task_id")
         if not task_id:
             last_err = RuntimeError(f"tasks.run returned no task id: {submission}")
-            time.sleep(resubmission_backoff_base * (2 ** sub_idx))
+            time.sleep(min(resubmission_backoff_base * (2 ** sub_idx), resubmission_backoff_cap))
             continue
         if on_task_id is not None:
             try:
@@ -130,13 +136,22 @@ def run_task_resilient(
         except Exception as e:
             last_err = e
             import sys
+            is_last = sub_idx + 1 >= max_resubmissions
+            verb = "GIVING UP" if is_last else "resubmitting"
             print(
                 f"[infsh] submission {sub_idx + 1}/{max_resubmissions} "
-                f"task {task_id} failed: {type(e).__name__}: {e} — resubmitting",
+                f"task {task_id} failed: {type(e).__name__}: {e} — {verb}",
                 file=sys.stderr,
             )
-            time.sleep(resubmission_backoff_base * (2 ** sub_idx))
+            if not is_last:
+                time.sleep(min(resubmission_backoff_base * (2 ** sub_idx), resubmission_backoff_cap))
 
+    import sys
+    print(
+        f"[infsh] ALL {max_resubmissions} resubmissions exhausted; raising. "
+        f"last error: {last_err}",
+        file=sys.stderr,
+    )
     raise RuntimeError(
         f"inference.sh call failed after {max_resubmissions} resubmissions. "
         f"last error: {last_err}"
