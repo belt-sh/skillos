@@ -119,6 +119,20 @@ Order matters: things at the top affect results most.
   public, so TRL's `inspect.getmembers` auto-registered it as a 4th tool. Fixed
   by renaming → `_compute_reward`. The bug inflated `tools/failure_frequency`
   to 0.48 because curator was calling the no-op reward method as a tool.
+- [x] Curator system prompt — bug found 2026-05-20: `CURATOR_SYSTEM` from
+  Appendix A.1 was defined in `prompts.py` but never used. The dataset only
+  shipped a terse user message, so the curator's system prompt was reduced to
+  TRL's auto-generated "you have these tools" boilerplate. Without the paper's
+  Action Guidelines ("If trajectory is correct, extract reusable knowledge…
+  If incorrect, identify the failure point and extract skills that can help
+  fix the issue"), Qwen3-8B refused to call any tool and emitted ~85 tokens
+  of natural-language "no skill needed" instead. Fixed by including
+  `{"role": "system", "content": CURATOR_SYSTEM}` in `build_dataset`.
+- [x] Task description extraction — bug found 2026-05-20: ALFWorld puts the
+  actual task on the line `Your task is to: …` near the *end* of the initial
+  observation, not the start. We were taking `observation.split("\n")[0]`,
+  which is the welcome banner. Fixed in `_extract_task_description` to scan
+  lines for the "your task is" prefix.
 - [ ] Top-K skill retrieval = 5 — confirmed in `curator_env.py` (`top_k=5`)
 - [ ] `temperature=1.0` for curator generation — confirmed in configs
 - [ ] `learning_rate=1e-6` — confirmed in configs

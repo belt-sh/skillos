@@ -1,0 +1,57 @@
+# Smallest-possible debug config. Goal: prove every piece of the pipeline
+# produces useful signal, fast and cheap.
+#
+# Models are paper-faithful (real Qwen3-8B executor + Qwen3-32B judge via
+# inference.sh so the curator sees real LLM trajectories worth curating from).
+# Hyperparams are the smallest legal values to iterate quickly:
+# - num_generations=2: the absolute minimum for GRPO advantage std
+# - num_episodes=4: 2 optimizer steps total
+# - max_completion 4096 (paper)
+# - max_steps 3 (env var): short trajectories, fast iteration
+#
+# Prompts are paper-1:1 (CURATOR_SYSTEM + CURATOR_INPUT_TEMPLATE verbatim).
+# This run isn't trying to match paper results — it's checking that the
+# pipeline produces non-zero gradients with real curation signal.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/debug
+
+epochs: 1
+num_episodes: 4
+batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-6
+num_generations: 2
+max_completion_length: 4096
+temperature: 1.0
+beta: 0.001
+
+use_vllm: false
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.7
+  max_tokens: 256
+
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 1
+save_total_limit: 2
+
+wandb_run_name: debug

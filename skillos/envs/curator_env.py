@@ -170,7 +170,7 @@ def _run_one_rollout(group_id: int, max_steps: int) -> dict:
         obs, infos = env.reset()
         observation = obs[0]
         admissible_actions = infos.get("admissible_commands", [[]])[0]
-        task_description = observation.split("\n")[0] if observation else "Unknown task"
+        task_description = _extract_task_description(observation)
 
     # Skill retrieval reads only — safe outside the lock.
     retrieved = _shared_skill_repo.retrieve(task_description, top_k=5)
@@ -214,6 +214,30 @@ def _run_one_rollout(group_id: int, max_steps: int) -> dict:
         "task_description": task_description,
         "skills_text": skills_text,
     }
+
+
+def _extract_task_description(observation: str) -> str:
+    """Pull the real ALFWorld task from the initial observation.
+
+    The observation is shaped like:
+        -= Welcome to TextWorld, ALFRED! =-
+
+        You are in the middle of a room. … (room description)
+
+        Your task is to: put a cool bread in countertop.
+
+    The task description is the line that starts with "Your task is to:". The
+    naive `observation.split("\\n")[0]` we used previously returned the welcome
+    banner, which left the curator with no goal to reason about and caused it
+    to refuse all curation ops.
+    """
+    if not observation:
+        return "Unknown task"
+    for line in observation.splitlines():
+        s = line.strip()
+        if s.lower().startswith("your task is"):
+            return s
+    return observation.splitlines()[0].strip()
 
 
 def _format_trajectory(result: dict) -> str:

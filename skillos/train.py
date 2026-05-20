@@ -39,20 +39,27 @@ def _has_vllm() -> bool:
 
 
 def build_dataset(num_episodes: int = 1000) -> Dataset:
-    """Build a dataset of curator prompts.
+    """Build a dataset of curator prompts (paper Appendix A.1, 1:1).
 
     Each row triggers one curator episode:
     1. CuratorEnv.reset() runs the frozen executor on an ALFWorld task
-    2. Returns the trajectory as observation
+    2. Returns the CURATOR_INPUT_TEMPLATE-formatted trajectory text, which
+       TRL appends to the user message
     3. Curator decides insert/update/delete via tool calls
+
+    Paper structure:
+      system: CURATOR_SYSTEM (Role + Input Data + Critical Constraints +
+              Skill Markdown Format + Action Guidelines, verbatim)
+      user:   CURATOR_INPUT_TEMPLATE (Task / Past Skills / Trajectory / Result,
+              filled in by env.reset() — TRL appends env observation to user)
     """
+    from skillos.curator.prompts import CURATOR_SYSTEM
     return Dataset.from_dict({
         "prompt": [
-            [{"role": "user", "content": (
-                "You are a skill curator. Analyze the agent trajectory below and decide "
-                "whether to insert a new skill, update an existing skill, or delete a skill "
-                "from the skill repository. Use the available tools to manage skills."
-            )}]
+            [
+                {"role": "system", "content": CURATOR_SYSTEM},
+                {"role": "user", "content": ""},
+            ]
         ] * num_episodes,
     })
 
