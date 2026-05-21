@@ -181,6 +181,13 @@ def train(config: dict):
         """
 
         def on_save(self, args, state, control, **kwargs):
+            # Multi-rank guard: only rank 0 writes the shared skills/
+            # checkpoint files. Without this gate all 8 ranks race on the
+            # same directory and SkillRepo.save()'s `for fn in listdir:
+            # os.remove(fn)` blows up with FileNotFoundError on whichever
+            # rank loses the race.
+            if not state.is_world_process_zero:
+                return
             ckpt_root = f"{args.output_dir}/checkpoint-{state.global_step}"
             _ce._shared_skill_repo.save(f"{ckpt_root}/skills")
             # Snapshot rollouts.jsonl so post-crash analytics / reward
