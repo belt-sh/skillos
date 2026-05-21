@@ -266,8 +266,17 @@ def train(config: dict):
             _ce.set_step_expected_rollouts(rollouts_per_step)
     trainer.add_callback(StepBoundaryObserver())
 
+    # Resume path: config key wins; otherwise fall back to env var so a
+    # launcher (run.sh) can pass it without rewriting the YAML each time.
+    resume_ckpt = (
+        config.get("resume_from_checkpoint")
+        or os.environ.get("SKILLOS_RESUME_FROM_CHECKPOINT")
+        or None
+    )
+    if resume_ckpt:
+        print(f"[train] resuming from checkpoint: {resume_ckpt}")
     try:
-        trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
+        trainer.train(resume_from_checkpoint=resume_ckpt)
     except KeyboardInterrupt:
         print("Interrupted — attempting to save current state…")
 
