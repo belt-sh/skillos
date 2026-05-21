@@ -1,0 +1,43 @@
+# Fast smoke for the resume path. Real Qwen3-0.6B + real TRL GRPOTrainer,
+# but heuristic executor + judge (no infsh, no ALFWorld) so each step
+# completes in seconds. Used by scripts/debug_resume_smoke.sh to verify
+# that SkillRepoSaver writes skills/judge_cache/rollouts every step and
+# SkillRepoLoader restores them on a real `trainer.train(resume_from_checkpoint=...)`.
+
+model: Qwen/Qwen3-0.6B
+output_dir: ./output/smoke-resume
+
+epochs: 1
+num_episodes: 6           # 3 steps × (batch=1 × grad_accum=1) × 2 gens = 6 rollouts
+batch_size: 2                 # generation_batch_size (= batch × grad_accum) must be divisible by num_generations
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-6
+num_generations: 2
+max_completion_length: 128
+temperature: 1.0
+beta: 0.0
+
+use_vllm: false
+use_lora: true
+lora_r: 8
+lora_alpha: 16
+
+enable_thinking: false
+
+executor:
+  type: heuristic
+judge:
+  type: heuristic
+
+logging_steps: 1
+report_to: none
+
+save_strategy: steps
+save_steps: 1
+save_total_limit: 5
+
+# To test the resume path: plant skills + judge_cache.json into one of the
+# saved checkpoints, then add e.g.
+#   resume_from_checkpoint: ./output/smoke-resume/checkpoint-4
+# and re-run. Expect `[resume] loaded N skills` and
+# `[resume] restored judge cache: M entries` in the output.
