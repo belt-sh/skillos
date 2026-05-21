@@ -129,7 +129,20 @@ class InfshJudge(Judge):
                  temperature: float = 0.0, max_tokens: int = 256,
                  context_size: int = 8192,
                  infra: str = "cloud", variant: str = "default",
-                 setup: dict | None = None):
+                 setup: dict | None = None,
+                 reasoning_effort: str | None = "none",
+                 reasoning_max_tokens: int | None = 0,
+                 reasoning_exclude: bool = True):
+        """Reasoning is disabled by default for the judge: Qwen3-32B emits
+        the same JSON verdict for our rubric either way, and the reasoning
+        preamble costs ~2× tokens and 1–3s of tail latency per call.
+
+        Empirically, `reasoning_effort="none"` alone was ignored by the
+        openrouter/qwen3-32b app — reasoning was still generated. So we
+        also set `reasoning_max_tokens=0` (hard cap) and
+        `reasoning_exclude=True` (strip from output). Pass None for any
+        of these to opt out individually.
+        """
         from inferencesh import inference
         from skillos.utils.infsh_auth import resolve_infsh_api_key
         self.app = app
@@ -141,19 +154,29 @@ class InfshJudge(Judge):
         self.infra = infra
         self.variant = variant
         self.setup = setup or {}
+        self.reasoning_effort = reasoning_effort
+        self.reasoning_max_tokens = reasoning_max_tokens
+        self.reasoning_exclude = reasoning_exclude
 
     def score(self, skill_content: str) -> float:
         prompt = CONTENT_QUALITY_JUDGE.format(content=skill_content)
+        input_payload = {
+            "text": prompt,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "context_size": self.context_size,
+        }
+        if self.reasoning_effort is not None:
+            input_payload["reasoning_effort"] = self.reasoning_effort
+        if self.reasoning_max_tokens is not None:
+            input_payload["reasoning_max_tokens"] = self.reasoning_max_tokens
+        if self.reasoning_exclude is not None:
+            input_payload["reasoning_exclude"] = self.reasoning_exclude
         params = {
             "app": self.app,
             "infra": self.infra,
             "variant": self.variant,
-            "input": {
-                "text": prompt,
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-                "context_size": self.context_size,
-            },
+            "input": input_payload,
         }
         if self.setup:
             params["setup"] = self.setup
