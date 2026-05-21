@@ -159,9 +159,21 @@ class InfshJudge(Judge):
             params["setup"] = self.setup
         from skillos.utils.infsh_client import run_task_resilient
         from skillos.executor.executor import _log_infsh_task
+        # Judge retry budget must stay well under the env-level judge timeout
+        # (_judge_timeout_s, default 600s) and under NCCL's 1800s watchdog.
+        # Worst case here: 2 resubmissions × (1 stream reconnect × 120s +
+        # 120s poll fallback) + ~10s backoff = ~490s. Bounded; survives normal
+        # infsh hiccups; gives up promptly under a real outage so the rank
+        # can reach the reward gather.
+        import os as _os
         result = run_task_resilient(
             self.client, params,
             on_task_id=lambda tid: _log_infsh_task("judge", self.app, tid),
+            max_stream_reconnects=int(_os.environ.get("SKILLOS_JUDGE_MAX_STREAM_RECONNECTS", "1")),
+            poll_fallback_max_seconds=float(_os.environ.get("SKILLOS_JUDGE_POLL_MAX_S", "120")),
+            max_resubmissions=int(_os.environ.get("SKILLOS_JUDGE_MAX_RESUBS", "2")),
+            resubmission_backoff_base=float(_os.environ.get("SKILLOS_JUDGE_BACKOFF_BASE_S", "10")),
+            resubmission_backoff_cap=float(_os.environ.get("SKILLOS_JUDGE_BACKOFF_CAP_S", "60")),
         )
         output = (result or {}).get("output") or {}
         text = output.get("response", "") if isinstance(output, dict) else ""

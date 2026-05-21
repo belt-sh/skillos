@@ -50,6 +50,11 @@ _judge: Judge = HeuristicJudge()
 _max_steps = int(os.environ.get("SKILLOS_EXECUTOR_MAX_STEPS", "10"))
 _max_parallel_rollouts = int(os.environ.get("SKILLOS_PARALLEL_ROLLOUTS", "16"))
 _max_parallel_judges = int(os.environ.get("SKILLOS_PARALLEL_JUDGES", "16"))
+# Per-future deadlines. Must each be strictly less than the NCCL collective
+# watchdog (default 1800 s) so a single stuck infsh call can't out-wait it
+# and trip the multi-rank watchdog.
+_executor_timeout_s = float(os.environ.get("SKILLOS_EXECUTOR_TIMEOUT_S", "1200"))
+_judge_timeout_s = float(os.environ.get("SKILLOS_JUDGE_TIMEOUT_S", "600"))
 _num_generations = 1  # set via configure()
 
 # Concurrency primitives.
@@ -484,7 +489,30 @@ class CuratorEnv:
         self._judge_futures = []
 
         future = self._get_or_submit_group_future()
-        result = future.result()
+        try:
+            result = future.result(timeout=_executor_timeout_s)
+        except concurrent.futures.TimeoutError:
+            # Don't out-wait the NCCL collective watchdog. Replace the group's
+            # future with a resolved sentinel so other slots in this group
+            # short-circuit instead of each waiting their own full timeout.
+            print(
+                f"[curator_env] executor rollout timed out after "
+                f"{_executor_timeout_s:.0f}s for group {self._group_id} "
+                f"(slot {self._slot}); using sentinel-failure trajectory",
+                file=sys.stderr,
+                flush=True,
+            )
+            result = {
+                "trajectory": [],
+                "success": False,
+                "steps": 0,
+                "task_description": "executor-timeout",
+                "skills_text": "",
+            }
+            with _batch_lock:
+                resolved: concurrent.futures.Future = concurrent.futures.Future()
+                resolved.set_result(result)
+                _group_trajectories[self._group_id] = resolved
         self._executor_result = result
         _on_rollout_start(self._slot)
 
@@ -595,10 +623,22 @@ class CuratorEnv:
 
         r_cnt = 0.0
         if self._judge_futures:
-            # Let exceptions propagate — bad judge data is worse than a
-            # crash + checkpoint resume. The resilient client should have
-            # already retried up to ~100 min before giving up.
-            scores = [f.result() for f in self._judge_futures]
+            # Per-future timeout: one stalled judge call must not block the
+            # rank's reward gather (which would trip the NCCL watchdog on
+            # peer ranks). Dropped scores are preferable to a multi-hour
+            # job loss; the underlying resilient client still retries inside
+            # its own budget — we only refuse to wait past _judge_timeout_s.
+            scores = []
+            for f in self._judge_futures:
+                try:
+                    scores.append(f.result(timeout=_judge_timeout_s))
+                except concurrent.futures.TimeoutError:
+                    print(
+                        f"[curator_env] judge call timed out after "
+                        f"{_judge_timeout_s:.0f}s; dropping its score",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             r_cnt = sum(scores) / len(scores) if scores else 0.0
 
         r_comp = reward_compression(_shared_skill_repo.total_tokens(), self._input_tokens)

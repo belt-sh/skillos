@@ -111,7 +111,6 @@ def train(config: dict):
         gradient_accumulation_steps=config.get("gradient_accumulation_steps", 8),
         learning_rate=config.get("learning_rate", 1e-6),
         num_generations=config.get("num_generations", 4),
-        generation_batch_size=config.get("generation_batch_size", config.get("num_generations", 4)),
         max_completion_length=config.get("max_completion_length", 4096),
         temperature=config.get("temperature", 1.0),
         beta=config.get("beta", 0.0),  # GRPO KL coefficient (paper: 0.001)
@@ -135,6 +134,12 @@ def train(config: dict):
         grpo_kwargs["use_vllm"] = True
         grpo_kwargs["vllm_mode"] = config.get("vllm_mode", "colocate")
 
+    # TRL requires generation_batch_size to be a multiple of the global batch
+    # (per_device × num_processes). Only forward an explicit value; otherwise
+    # let TRL pick its own default to avoid hardcoded mismatches.
+    if "generation_batch_size" in config:
+        grpo_kwargs["generation_batch_size"] = config["generation_batch_size"]
+
     grpo_args = GRPOConfig(**grpo_kwargs)
 
     # LoRA config via peft
@@ -156,16 +161,90 @@ def train(config: dict):
         environment_factory=CuratorEnv,
     )
 
-    # Persist the skill repo alongside every checkpoint and at final save.
-    # The adapter alone is useless at eval time — the curator's learned
-    # behavior is *what curates*, but evaluation uses the repo's skills.
+    # Persist the skill repo + rollouts + judge cache alongside every
+    # checkpoint, and load them back when resuming. The adapter alone is
+    # useless at eval time — the curator's learned behavior is *what
+    # curates*, but evaluation (and the next opt-step of a resumed run)
+    # consumes the repo's skills. Without the load-on-resume hook a
+    # resumed run starts with an empty repo and trains a different problem
+    # than the pre-crash run.
     from transformers import TrainerCallback
     from skillos.envs import curator_env as _ce
+    import json as _json
+    import shutil as _shutil
+
     class SkillRepoSaver(TrainerCallback):
+        """Save skill repo + rollouts.jsonl + judge cache on each checkpoint.
+
+        Cost: <100 KB skills + jsonl copy + JSON dump of judge cache. Cheap
+        enough to do every step (drop save_steps to 1 in the config).
+        """
+
         def on_save(self, args, state, control, **kwargs):
-            ckpt = f"{args.output_dir}/checkpoint-{state.global_step}/skills"
-            _ce._shared_skill_repo.save(ckpt)
+            ckpt_root = f"{args.output_dir}/checkpoint-{state.global_step}"
+            _ce._shared_skill_repo.save(f"{ckpt_root}/skills")
+            # Snapshot rollouts.jsonl so post-crash analytics / reward
+            # histories aren't lost.
+            try:
+                if os.path.exists(_ce._rollouts_jsonl_path):
+                    _shutil.copyfile(
+                        _ce._rollouts_jsonl_path,
+                        f"{ckpt_root}/rollouts.jsonl",
+                    )
+            except Exception as e:
+                print(f"[ckpt] rollouts snapshot failed: {e}")
+            # Persist the judge cache so a resumed run doesn't re-pay for
+            # judge calls on content it has already scored.
+            try:
+                with _ce._judge_cache_lock:
+                    cache_snap = dict(_ce._judge_cache)
+                with open(f"{ckpt_root}/judge_cache.json", "w") as f:
+                    _json.dump(cache_snap, f)
+            except Exception as e:
+                print(f"[ckpt] judge cache snapshot failed: {e}")
+
+    class SkillRepoLoader(TrainerCallback):
+        """When resuming from a checkpoint, restore the skill repo + judge
+        cache before training resumes. Without this the resumed run trains
+        a different problem than the pre-crash run.
+
+        HF TrainerCallback isn't told the resume path directly — the only
+        signal in on_train_begin is `state.global_step > 0`. When that's
+        the case, the corresponding checkpoint is at
+        `{output_dir}/checkpoint-{global_step}`.
+
+        Rollouts.jsonl is intentionally *not* copied back to the live path —
+        it's snapshotted into the checkpoint for analytics; the live file
+        keeps growing append-only across runs.
+        """
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            if state.global_step <= 0:
+                return  # fresh run, nothing to restore
+            ckpt = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            if not os.path.isdir(ckpt):
+                print(f"[resume] no checkpoint at {ckpt}; skipping skill/cache restore")
+                return
+            from skillos.skills.repo import SkillRepo
+            skills_dir = os.path.join(ckpt, "skills")
+            if os.path.isdir(skills_dir):
+                loaded = SkillRepo.load(skills_dir)
+                _ce._shared_skill_repo.skills = loaded.skills
+                _ce._shared_skill_repo._bm25_dirty = True
+                print(f"[resume] loaded {len(loaded.skills)} skills from {skills_dir}")
+            cache_path = os.path.join(ckpt, "judge_cache.json")
+            if os.path.isfile(cache_path):
+                try:
+                    with open(cache_path) as f:
+                        cache = _json.load(f)
+                    with _ce._judge_cache_lock:
+                        _ce._judge_cache.update(cache)
+                    print(f"[resume] restored judge cache: {len(cache)} entries")
+                except Exception as e:
+                    print(f"[resume] judge cache restore failed: {e}")
+
     trainer.add_callback(SkillRepoSaver())
+    trainer.add_callback(SkillRepoLoader())
 
     # Per-opt-step observability: reset rollout counters + (re)start heartbeat.
     rollouts_per_step = (
