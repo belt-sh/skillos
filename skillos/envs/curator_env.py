@@ -502,17 +502,19 @@ class CuratorEnv:
                 file=sys.stderr,
                 flush=True,
             )
-            result = {
-                "trajectory": [],
-                "success": False,
-                "steps": 0,
-                "task_description": "executor-timeout",
-                "skills_text": "",
-            }
-            with _batch_lock:
-                resolved: concurrent.futures.Future = concurrent.futures.Future()
-                resolved.set_result(result)
-                _group_trajectories[self._group_id] = resolved
+            result = self._sentinel_trajectory("executor-timeout")
+        except Exception as e:
+            # Executor rollout raised (e.g. resilient client exhausted its
+            # retry budget during an inference.sh outage). Degrade to a
+            # sentinel-failure trajectory rather than crashing the 8-rank run.
+            print(
+                f"[curator_env] executor rollout failed for group "
+                f"{self._group_id} (slot {self._slot}): {type(e).__name__}: {e}; "
+                f"using sentinel-failure trajectory (likely infsh outage)",
+                file=sys.stderr,
+                flush=True,
+            )
+            result = self._sentinel_trajectory("executor-error")
         self._executor_result = result
         _on_rollout_start(self._slot)
 
@@ -628,6 +630,12 @@ class CuratorEnv:
             # peer ranks). Dropped scores are preferable to a multi-hour
             # job loss; the underlying resilient client still retries inside
             # its own budget — we only refuse to wait past _judge_timeout_s.
+            #
+            # We ALSO drop scores when the resilient client has exhausted its
+            # retry budget and raises (e.g. an inference.sh outage: "no cloud
+            # workers available" / "worker disconnected"). A transient infra
+            # outage must degrade the reward signal for that rollout, not crash
+            # an 8-rank multi-hour run. This mirrors the timeout path.
             scores = []
             for f in self._judge_futures:
                 try:
@@ -636,6 +644,13 @@ class CuratorEnv:
                     print(
                         f"[curator_env] judge call timed out after "
                         f"{_judge_timeout_s:.0f}s; dropping its score",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                except Exception as e:
+                    print(
+                        f"[curator_env] judge call failed ({type(e).__name__}: {e}); "
+                        f"dropping its score (likely infsh outage)",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -650,6 +665,24 @@ class CuratorEnv:
         return self.reward
 
     # ---- Group dispatch internals -------------------------------------
+
+    def _sentinel_trajectory(self, task_tag: str) -> dict:
+        """Build a failed-trajectory sentinel and install it as this group's
+        resolved future, so the other slots in the group short-circuit instead
+        of each re-waiting (timeout) or re-raising (error) on the dead future.
+        """
+        result = {
+            "trajectory": [],
+            "success": False,
+            "steps": 0,
+            "task_description": task_tag,
+            "skills_text": "",
+        }
+        with _batch_lock:
+            resolved: concurrent.futures.Future = concurrent.futures.Future()
+            resolved.set_result(result)
+            _group_trajectories[self._group_id] = resolved
+        return result
 
     @property
     def _group_id(self) -> int:

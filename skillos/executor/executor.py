@@ -155,10 +155,23 @@ class InfshExecutor(Executor):
     """
 
     def __init__(self, app: str = "openrouter/qwen3-8b", api_key: str | None = None,
-                 history_length: int = 3, temperature: float = 0.7,
-                 max_tokens: int = 256, context_size: int = 8192,
+                 history_length: int = 3, temperature: float = 0.6,
+                 max_tokens: int = 8192, context_size: int = 32768,
+                 top_p: float = 0.95,
                  infra: str = "cloud", variant: str = "default",
-                 setup: dict | None = None):
+                 setup: dict | None = None,
+                 reasoning_effort: str | None = "medium"):
+        """Defaults follow the Qwen3-8B HF model card's *thinking-mode*
+        recommendation (temperature=0.6, top_p=0.95, native 32768 context,
+        generous output budget), because the ALFWORLD_EXECUTOR prompt requires
+        the model to reason inside <think></think> tags before emitting
+        <action></action>. The previous defaults (reasoning off via app
+        default, max_tokens=256, context 8192, temp 0.7) silently produced a
+        no-reasoning, token-starved executor — not what the paper specifies,
+        and the likely cause of the depressed no-memory baseline. The card
+        also warns: "DO NOT use greedy decoding." Pass reasoning_effort=None
+        to force the old non-thinking behavior.
+        """
         from inferencesh import inference
         from skillos.utils.infsh_auth import resolve_infsh_api_key
         self.app = app
@@ -168,9 +181,11 @@ class InfshExecutor(Executor):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.context_size = context_size
+        self.top_p = top_p
         self.infra = infra
         self.variant = variant
         self.setup = setup or {}
+        self.reasoning_effort = reasoning_effort
 
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
@@ -178,16 +193,20 @@ class InfshExecutor(Executor):
             task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills, self.history_length,
         )
+        input_payload = {
+            "text": prompt,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+            "context_size": self.context_size,
+        }
+        if self.reasoning_effort is not None:
+            input_payload["reasoning_effort"] = self.reasoning_effort
         params = {
             "app": self.app,
             "infra": self.infra,
             "variant": self.variant,
-            "input": {
-                "text": prompt,
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-                "context_size": self.context_size,
-            },
+            "input": input_payload,
         }
         if self.setup:
             params["setup"] = self.setup
@@ -197,7 +216,15 @@ class InfshExecutor(Executor):
             on_task_id=lambda tid: _log_infsh_task("executor", self.app, tid),
         )
         output = (result or {}).get("output") or {}
-        text = output.get("response", "") if isinstance(output, dict) else ""
+        # Qwen3 native reasoning lands in a separate "reasoning" field; the
+        # final answer (with the <action> tag) is in "response". Concatenate
+        # so _parse_action sees the action regardless of where the model put it.
+        if isinstance(output, dict):
+            text = (output.get("response") or "")
+            if not text:
+                text = output.get("reasoning") or ""
+        else:
+            text = ""
         return _parse_action(text, admissible_actions)
 
 
@@ -250,12 +277,14 @@ def create_executor(config: dict) -> Executor:
             app=config.get("app", "openrouter/qwen3-8b"),
             api_key=config.get("api_key"),
             history_length=config.get("history_length", 3),
-            temperature=config.get("temperature", 0.7),
-            max_tokens=config.get("max_tokens", 256),
-            context_size=config.get("context_size", 8192),
+            temperature=config.get("temperature", 0.6),
+            max_tokens=config.get("max_tokens", 8192),
+            context_size=config.get("context_size", 32768),
+            top_p=config.get("top_p", 0.95),
             infra=config.get("infra", "cloud"),
             variant=config.get("variant", "default"),
             setup=config.get("setup"),
+            reasoning_effort=config.get("reasoning_effort", "medium"),
         )
     else:
         raise ValueError(f"Unknown executor type: {executor_type}")
