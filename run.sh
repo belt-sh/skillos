@@ -23,6 +23,14 @@ source .venv/bin/activate
 # ALFWorld dataset (heuristic envs need this even though we use infsh executor)
 export ALFWORLD_DATA="$HOME/.cache/alfworld"
 
+# Force HF to use the local cache without contacting the hub. The base
+# Qwen3-8B weights are fully cached; without this, 8 ranks calling
+# from_pretrained() concurrently race on hub verification and one can
+# spuriously raise "does not appear to have a file named model-...safetensors"
+# even though all shards are present. Offline mode eliminates that race.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 # Wandb: project + entity. When resuming, also rejoin the existing run so the
 # reward curve doesn't fragment into a new run each time. WANDB_RUN_ID is the
 # id of the 8xH100 LoRA run we want to attach to; bump this for a new fresh
