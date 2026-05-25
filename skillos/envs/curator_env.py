@@ -25,6 +25,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -126,6 +127,58 @@ def reset_shared_state() -> None:
     """Reset shared state at the start of a new task group (paper §3.2.1)."""
     global _shared_skill_repo
     _shared_skill_repo = SkillRepo()
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint state — skill repo + judge cache + rollouts snapshot.
+# Shared by the TRL save/load callbacks (train.py) and the resume test
+# (scripts/debug_checkpoint_resume.py) so neither hand-mirrors the other.
+# ---------------------------------------------------------------------------
+
+def save_curator_state(ckpt_root: str, rollouts_src: str | None = None) -> None:
+    """Persist the skill repo, judge cache, and (optionally) a rollouts
+    snapshot under ckpt_root. The skill repo is the eval artifact; the judge
+    cache lets a resumed run skip already-paid judge calls; rollouts are
+    snapshotted only for post-crash analytics (the live append-only file
+    remains the source of truth)."""
+    os.makedirs(ckpt_root, exist_ok=True)
+    _shared_skill_repo.save(f"{ckpt_root}/skills")
+    if rollouts_src and os.path.exists(rollouts_src):
+        try:
+            shutil.copyfile(rollouts_src, f"{ckpt_root}/rollouts.jsonl")
+        except Exception as e:
+            print(f"[ckpt] rollouts snapshot failed: {e}", file=sys.stderr)
+    try:
+        with _judge_cache_lock:
+            cache_snap = dict(_judge_cache)
+        with open(f"{ckpt_root}/judge_cache.json", "w") as f:
+            json.dump(cache_snap, f)
+    except Exception as e:
+        print(f"[ckpt] judge cache snapshot failed: {e}", file=sys.stderr)
+
+
+def load_curator_state(ckpt_root: str) -> int:
+    """Restore the skill repo + judge cache from ckpt_root into the shared
+    module state. Returns the number of skills loaded. Rollouts are not
+    copied back — the live append-only file keeps growing across runs."""
+    skills_dir = os.path.join(ckpt_root, "skills")
+    n_skills = 0
+    if os.path.isdir(skills_dir):
+        loaded = SkillRepo.load(skills_dir)
+        _shared_skill_repo.replace_skills(loaded.skills)
+        n_skills = len(loaded.skills)
+        print(f"[resume] loaded {n_skills} skills from {skills_dir}")
+    cache_path = os.path.join(ckpt_root, "judge_cache.json")
+    if os.path.isfile(cache_path):
+        try:
+            with open(cache_path) as f:
+                cache = json.load(f)
+            with _judge_cache_lock:
+                _judge_cache.update(cache)
+            print(f"[resume] restored judge cache: {len(cache)} entries")
+        except Exception as e:
+            print(f"[resume] judge cache restore failed: {e}", file=sys.stderr)
+    return n_skills
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +418,19 @@ def _submit_judge(content: str) -> concurrent.futures.Future:
 # Executor rollout — one per group
 # ---------------------------------------------------------------------------
 
+def _trajectory_result(trajectory=None, success=False, steps=0,
+                       task_description="", skills_text="") -> dict:
+    """The canonical executor-rollout result shape, shared by a real rollout
+    and by the sentinel-failure path so the two can't drift."""
+    return {
+        "trajectory": trajectory or [],
+        "success": success,
+        "steps": steps,
+        "task_description": task_description,
+        "skills_text": skills_text,
+    }
+
+
 def _run_one_rollout(group_id: int, max_steps: int) -> dict:
     """Reset group_id's alfworld env and run the frozen executor through it.
 
@@ -413,13 +479,13 @@ def _run_one_rollout(group_id: int, max_steps: int) -> dict:
         if done:
             success = score > 0
 
-    return {
-        "trajectory": trajectory,
-        "success": success,
-        "steps": step,
-        "task_description": task_description,
-        "skills_text": skills_text,
-    }
+    return _trajectory_result(
+        trajectory=trajectory,
+        success=success,
+        steps=step,
+        task_description=task_description,
+        skills_text=skills_text,
+    )
 
 
 def _extract_task_description(observation: str) -> str:
@@ -671,13 +737,7 @@ class CuratorEnv:
         resolved future, so the other slots in the group short-circuit instead
         of each re-waiting (timeout) or re-raising (error) on the dead future.
         """
-        result = {
-            "trajectory": [],
-            "success": False,
-            "steps": 0,
-            "task_description": task_tag,
-            "skills_text": "",
-        }
+        result = _trajectory_result(task_description=task_tag)
         with _batch_lock:
             resolved: concurrent.futures.Future = concurrent.futures.Future()
             resolved.set_result(result)

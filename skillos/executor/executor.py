@@ -109,10 +109,23 @@ class VLLMExecutor(Executor):
     """Frozen executor calling a vLLM server."""
 
     def __init__(self, base_url: str = "http://localhost:8002/v1",
-                 model: str = "Qwen/Qwen3-8B", history_length: int = 3):
+                 model: str = "Qwen/Qwen3-8B", history_length: int = 3,
+                 temperature: float = 0.6, max_tokens: int = 2048,
+                 top_p: float | None = None, top_k: int | None = None,
+                 min_p: float | None = None, presence_penalty: float | None = None,
+                 enable_thinking: bool | None = None):
         self.base_url = base_url
         self.model = model
         self.history_length = history_length
+        self.temperature = temperature
+        # Qwen3 thinking-mode emits <think>…</think> inline before <action>;
+        # 256 (openai_chat default) truncates the reasoning. Give it room.
+        self.max_tokens = max_tokens
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
+        self.presence_penalty = presence_penalty
+        self.enable_thinking = enable_thinking
 
     def act(self, task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills) -> str:
@@ -121,7 +134,18 @@ class VLLMExecutor(Executor):
             task_description, observation, admissible_actions,
             step_count, action_history, retrieved_skills, self.history_length,
         )
-        result = openai_chat(self.base_url, self.model, prompt, temperature=0.7)
+        extra: dict = {}
+        if self.top_k is not None:
+            extra["top_k"] = self.top_k
+        if self.min_p is not None:
+            extra["min_p"] = self.min_p
+        if self.presence_penalty is not None:
+            extra["presence_penalty"] = self.presence_penalty
+        if self.enable_thinking is not None:
+            extra["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
+        result = openai_chat(self.base_url, self.model, prompt,
+                             temperature=self.temperature, max_tokens=self.max_tokens,
+                             top_p=self.top_p, extra_body=extra or None)
         return _parse_action(result, admissible_actions)
 
 
@@ -157,7 +181,8 @@ class InfshExecutor(Executor):
     def __init__(self, app: str = "openrouter/qwen3-8b", api_key: str | None = None,
                  history_length: int = 3, temperature: float = 0.6,
                  max_tokens: int = 8192, context_size: int = 32768,
-                 top_p: float = 0.95,
+                 top_p: float = 0.95, top_k: int | None = None,
+                 min_p: float | None = None,
                  infra: str = "cloud", variant: str = "default",
                  setup: dict | None = None,
                  reasoning_effort: str | None = "medium"):
@@ -165,12 +190,10 @@ class InfshExecutor(Executor):
         recommendation (temperature=0.6, top_p=0.95, native 32768 context,
         generous output budget), because the ALFWORLD_EXECUTOR prompt requires
         the model to reason inside <think></think> tags before emitting
-        <action></action>. The previous defaults (reasoning off via app
-        default, max_tokens=256, context 8192, temp 0.7) silently produced a
-        no-reasoning, token-starved executor — not what the paper specifies,
-        and the likely cause of the depressed no-memory baseline. The card
-        also warns: "DO NOT use greedy decoding." Pass reasoning_effort=None
-        to force the old non-thinking behavior.
+        <action></action>. A reasoning-off, token-starved executor (e.g.
+        max_tokens=256) silently underperforms here. The card also warns:
+        "DO NOT use greedy decoding." Pass reasoning_effort=None to force
+        non-thinking behavior.
         """
         from inferencesh import inference
         from skillos.utils.infsh_auth import resolve_infsh_api_key
@@ -182,6 +205,8 @@ class InfshExecutor(Executor):
         self.max_tokens = max_tokens
         self.context_size = context_size
         self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
         self.infra = infra
         self.variant = variant
         self.setup = setup or {}
@@ -200,6 +225,10 @@ class InfshExecutor(Executor):
             "max_tokens": self.max_tokens,
             "context_size": self.context_size,
         }
+        if self.top_k is not None:
+            input_payload["top_k"] = self.top_k
+        if self.min_p is not None:
+            input_payload["min_p"] = self.min_p
         if self.reasoning_effort is not None:
             input_payload["reasoning_effort"] = self.reasoning_effort
         params = {
@@ -264,6 +293,13 @@ def create_executor(config: dict) -> Executor:
             base_url=config.get("base_url", "http://localhost:8002/v1"),
             model=config.get("model", "Qwen/Qwen3-8B"),
             history_length=config.get("history_length", 3),
+            temperature=config.get("temperature", 0.6),
+            max_tokens=config.get("max_tokens", 2048),
+            top_p=config.get("top_p"),
+            top_k=config.get("top_k"),
+            min_p=config.get("min_p"),
+            presence_penalty=config.get("presence_penalty"),
+            enable_thinking=config.get("enable_thinking"),
         )
     elif executor_type == "api":
         return APIExecutor(
@@ -281,6 +317,8 @@ def create_executor(config: dict) -> Executor:
             max_tokens=config.get("max_tokens", 8192),
             context_size=config.get("context_size", 32768),
             top_p=config.get("top_p", 0.95),
+            top_k=config.get("top_k"),
+            min_p=config.get("min_p"),
             infra=config.get("infra", "cloud"),
             variant=config.get("variant", "default"),
             setup=config.get("setup"),

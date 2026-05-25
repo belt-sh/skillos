@@ -24,7 +24,7 @@ import json
 import os
 import re
 import time
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 from pathlib import Path
 
 # Map alfworld game file paths to one of the 6 paper task types.
@@ -54,6 +54,74 @@ def extract_task_description(observation: str) -> str:
         if s.lower().startswith("your task is"):
             return s
     return observation.splitlines()[0].strip()
+
+
+# The 6 paper task types, in Table 1 column order.
+TASK_COLS = ["Pick", "Look", "Clean", "Heat", "Cool", "Pick2"]
+
+
+def resolve_skills_dir(ckpt: Path) -> Path:
+    """Find the skills/ dir for a checkpoint, tolerating the layout where
+    skills were saved at <output_dir>/skills rather than under the checkpoint."""
+    skills_dir = ckpt / "skills"
+    if not skills_dir.is_dir():
+        skills_dir = ckpt.parent / "skills"
+    if not skills_dir.is_dir():
+        raise FileNotFoundError(
+            f"No skills/ directory under {ckpt} or {ckpt.parent}. "
+            "Did training run with the SkillRepoSaver callback?"
+        )
+    return skills_dir
+
+
+def report_eval_results(results: list[dict], split: str, n_skills: int,
+                        out_path: Path, wall_seconds: float,
+                        checkpoint: str | None = None) -> dict:
+    """Aggregate per-episode results into the paper's Table 1 row, print it,
+    and write a <out>.summary.json. Shared by the serial and parallel evals."""
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for r in results:
+        by_type[r["task_type"]].append(r)
+
+    def _stats(bucket: list[dict]) -> tuple[float | None, float | None]:
+        if not bucket:
+            return None, None
+        sr = sum(1 for x in bucket if x["success"]) / len(bucket)
+        steps = sum(x["steps"] for x in bucket) / len(bucket)
+        return sr, steps
+
+    print("\n=== ALFWorld eval — Table 1 row ===")
+    print(f"  {split:14s}" + "".join(f" {c:>7s}" for c in TASK_COLS) + "   Avg SR   Steps")
+    row = f"  skills={n_skills:4d}  "
+    totals_succ = totals_n = total_steps = 0
+    per_type: dict[str, dict] = {}
+    for c in TASK_COLS:
+        bucket = by_type.get(c, [])
+        sr, steps = _stats(bucket)
+        per_type[c] = {"n": len(bucket), "success_rate": sr, "avg_steps": steps}
+        row += f" {sr*100:6.1f}%" if sr is not None else f" {'-':>7s}"
+        totals_succ += sum(1 for x in bucket if x["success"])
+        totals_n += len(bucket)
+        total_steps += sum(x["steps"] for x in bucket)
+    avg_sr = totals_succ / totals_n if totals_n else 0.0
+    avg_st = total_steps / totals_n if totals_n else 0.0
+    row += f"   {avg_sr*100:5.1f}%   {avg_st:5.1f}"
+    print(row)
+
+    summary = {
+        "split": split, "skills": n_skills, "n_games": len(results),
+        "wall_seconds": wall_seconds, "by_type": per_type,
+        "avg_success_rate": avg_sr, "avg_steps": avg_st,
+    }
+    if checkpoint is not None:
+        summary["checkpoint"] = checkpoint
+    summary_path = out_path.with_suffix(".summary.json")
+    summary_path.write_text(json.dumps(summary, indent=2))
+    print(f"\nPer-episode log:  {out_path}")
+    print(f"Summary:          {summary_path}")
+    print(f"Wall time:        {wall_seconds:.0f}s "
+          f"({wall_seconds/max(len(results),1):.1f}s/game)")
+    return summary
 
 
 def run_episode(env, executor, repo, max_steps: int, history_length: int = 3) -> dict:
@@ -115,15 +183,7 @@ def main():
     args = p.parse_args()
 
     ckpt = Path(args.checkpoint)
-    skills_dir = ckpt / "skills"
-    if not skills_dir.is_dir():
-        # Tolerate the case where skills were saved at <output_dir>/skills not under checkpoint
-        skills_dir = ckpt.parent / "skills"
-    if not skills_dir.is_dir():
-        raise FileNotFoundError(
-            f"No skills/ directory under {ckpt} or {ckpt.parent}. "
-            "Did training run with the SkillRepoSaver callback?"
-        )
+    skills_dir = resolve_skills_dir(ckpt)
 
     from skillos.skills.repo import SkillRepo
     repo = SkillRepo.load(str(skills_dir))
@@ -132,17 +192,8 @@ def main():
         print("WARNING: repo is empty — eval will use no retrieved skills "
               "(equivalent to the 'No Memory' baseline).")
 
-    from skillos.envs.config import load_alfworld_config
-    from alfworld.agents.environment import get_environment
-
-    cfg = load_alfworld_config()
-    AlfredTWEnv = get_environment("AlfredTWEnv")
-    split_map = {
-        "valid_seen": "eval_in_distribution",
-        "valid_unseen": "eval_out_of_distribution",
-        "train": "train",
-    }
-    env = AlfredTWEnv(cfg, train_eval=split_map[args.split]).init_env(batch_size=1)
+    from skillos.envs.config import make_alfworld_env, SPLIT_MAP
+    env = make_alfworld_env(SPLIT_MAP[args.split], batch_size=1)
 
     from skillos.executor.executor import create_executor
     exec_cfg = {"type": args.executor}
@@ -169,53 +220,8 @@ def main():
             print(f"  game {i+1:3d}/{args.num_games}  {status}  {r['task_type']:6s}  "
                   f"{r['steps']:2d} steps  {r['task'][:60]}")
 
-    # --------- aggregate ---------
-    by_type: dict[str, list[dict]] = defaultdict(list)
-    for r in results:
-        by_type[r["task_type"]].append(r)
-
-    print("\n=== ALFWorld eval — Table 1 row ===")
-    cols = ["Pick", "Look", "Clean", "Heat", "Cool", "Pick2"]
-    header = f"  {args.split:14s}" + "".join(f" {c:>7s}" for c in cols) + "   Avg SR   Steps"
-    print(header)
-    row = f"  skills={len(repo):3d}    "
-    totals_succ = 0
-    totals_n = 0
-    total_steps = 0
-    for c in cols:
-        bucket = by_type.get(c, [])
-        n = len(bucket)
-        if n == 0:
-            row += f" {'-':>7s}"
-            continue
-        sr = sum(1 for x in bucket if x["success"]) / n
-        row += f" {sr*100:6.1f}%"
-        totals_succ += sum(1 for x in bucket if x["success"])
-        totals_n += n
-        total_steps += sum(x["steps"] for x in bucket)
-    avg_sr = (totals_succ / totals_n) if totals_n else 0.0
-    avg_st = (total_steps / totals_n) if totals_n else 0.0
-    row += f"   {avg_sr*100:5.1f}%   {avg_st:5.1f}"
-    print(row)
-
-    summary_path = out_path.with_suffix(".summary.json")
-    summary_path.write_text(json.dumps({
-        "split": args.split,
-        "checkpoint": str(ckpt),
-        "skills": len(repo),
-        "n_games": len(results),
-        "wall_seconds": time.time() - t0,
-        "by_type": {c: {"n": len(by_type.get(c, [])),
-                        "success_rate": (sum(1 for x in by_type.get(c, []) if x["success"]) /
-                                         len(by_type[c])) if by_type.get(c) else None,
-                        "avg_steps": (sum(x["steps"] for x in by_type.get(c, [])) /
-                                      len(by_type[c])) if by_type.get(c) else None}
-                    for c in cols},
-        "avg_success_rate": avg_sr,
-        "avg_steps": avg_st,
-    }, indent=2))
-    print(f"\nPer-episode log:  {out_path}")
-    print(f"Summary:          {summary_path}")
+    report_eval_results(results, args.split, len(repo), out_path,
+                        time.time() - t0, checkpoint=str(ckpt))
 
 
 if __name__ == "__main__":

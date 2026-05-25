@@ -12,10 +12,23 @@ Paper uses Qwen3-32B as judge.
 from __future__ import annotations
 
 import json
+import os
 import re
 from abc import ABC, abstractmethod
 
 from skillos.curator.prompts import CONTENT_QUALITY_JUDGE
+
+# Judge infsh retry budget. Kept well under the env-level judge timeout
+# (_judge_timeout_s, default 600s) and NCCL's 1800s watchdog. Worst case:
+# 2 resubmissions × (1 stream reconnect × 120s + 120s poll fallback) + ~10s
+# backoff ≈ 490s. Bounded; survives normal hiccups; gives up promptly under a
+# real outage so the rank can reach the reward gather. Read once at import
+# (env vars must be set before import — see run.sh).
+_JUDGE_MAX_STREAM_RECONNECTS = int(os.environ.get("SKILLOS_JUDGE_MAX_STREAM_RECONNECTS", "1"))
+_JUDGE_POLL_MAX_S = float(os.environ.get("SKILLOS_JUDGE_POLL_MAX_S", "120"))
+_JUDGE_MAX_RESUBS = int(os.environ.get("SKILLOS_JUDGE_MAX_RESUBS", "2"))
+_JUDGE_BACKOFF_BASE_S = float(os.environ.get("SKILLOS_JUDGE_BACKOFF_BASE_S", "10"))
+_JUDGE_BACKOFF_CAP_S = float(os.environ.get("SKILLOS_JUDGE_BACKOFF_CAP_S", "60"))
 
 
 class Judge(ABC):
@@ -182,21 +195,14 @@ class InfshJudge(Judge):
             params["setup"] = self.setup
         from skillos.utils.infsh_client import run_task_resilient
         from skillos.executor.executor import _log_infsh_task
-        # Judge retry budget must stay well under the env-level judge timeout
-        # (_judge_timeout_s, default 600s) and under NCCL's 1800s watchdog.
-        # Worst case here: 2 resubmissions × (1 stream reconnect × 120s +
-        # 120s poll fallback) + ~10s backoff = ~490s. Bounded; survives normal
-        # infsh hiccups; gives up promptly under a real outage so the rank
-        # can reach the reward gather.
-        import os as _os
         result = run_task_resilient(
             self.client, params,
             on_task_id=lambda tid: _log_infsh_task("judge", self.app, tid),
-            max_stream_reconnects=int(_os.environ.get("SKILLOS_JUDGE_MAX_STREAM_RECONNECTS", "1")),
-            poll_fallback_max_seconds=float(_os.environ.get("SKILLOS_JUDGE_POLL_MAX_S", "120")),
-            max_resubmissions=int(_os.environ.get("SKILLOS_JUDGE_MAX_RESUBS", "2")),
-            resubmission_backoff_base=float(_os.environ.get("SKILLOS_JUDGE_BACKOFF_BASE_S", "10")),
-            resubmission_backoff_cap=float(_os.environ.get("SKILLOS_JUDGE_BACKOFF_CAP_S", "60")),
+            max_stream_reconnects=_JUDGE_MAX_STREAM_RECONNECTS,
+            poll_fallback_max_seconds=_JUDGE_POLL_MAX_S,
+            max_resubmissions=_JUDGE_MAX_RESUBS,
+            resubmission_backoff_base=_JUDGE_BACKOFF_BASE_S,
+            resubmission_backoff_cap=_JUDGE_BACKOFF_CAP_S,
         )
         output = (result or {}).get("output") or {}
         text = output.get("response", "") if isinstance(output, dict) else ""
@@ -252,6 +258,9 @@ def create_judge(config: dict) -> Judge:
             infra=config.get("infra", "cloud"),
             variant=config.get("variant", "default"),
             setup=config.get("setup"),
+            reasoning_effort=config.get("reasoning_effort", "none"),
+            reasoning_max_tokens=config.get("reasoning_max_tokens", 0),
+            reasoning_exclude=config.get("reasoning_exclude", True),
         )
     else:
         raise ValueError(f"Unknown judge type: {judge_type}")

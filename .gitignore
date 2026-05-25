@@ -5,6 +5,7 @@ dist/
 build/
 .eggs/
 output/
+logs/
 wandb/
 *.pt
 *.safetensors

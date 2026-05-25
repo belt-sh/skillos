@@ -30,18 +30,28 @@ def openai_chat(
     api_key: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_RETRIES,
+    top_p: float | None = None,
+    extra_body: dict | None = None,
 ) -> str:
     """Call an OpenAI-compatible chat completions endpoint with retries.
 
     Retries on connection errors and HTTP 5xx with exponential backoff.
     4xx errors return immediately (likely a config bug, not transient).
+
+    extra_body merges vendor sampling knobs into the request (e.g. top_k,
+    min_p, presence_penalty, or vLLM's chat_template_kwargs for enable_thinking).
     """
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
-    }).encode()
+    }
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if extra_body:
+        payload.update(extra_body)
+    body = json.dumps(payload).encode()
 
     headers = {"Content-Type": "application/json"}
     if api_key:

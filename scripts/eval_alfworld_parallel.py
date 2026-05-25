@@ -23,10 +23,13 @@ import argparse
 import concurrent.futures
 import json
 import time
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 
-from scripts.eval_alfworld import classify_task, extract_task_description
+from scripts.eval_alfworld import (
+    classify_task, extract_task_description, report_eval_results,
+    resolve_skills_dir,
+)
 
 
 def main():
@@ -38,17 +41,33 @@ def main():
     p.add_argument("--batch-size", type=int, default=25,
                    help="games run concurrently per batch (executor calls fired in parallel)")
     p.add_argument("--max-steps", type=int, default=30)
-    p.add_argument("--executor", default="infsh", choices=["heuristic", "infsh"])
+    p.add_argument("--executor", default="infsh",
+                   choices=["heuristic", "infsh", "vllm", "api"])
     p.add_argument("--executor-app", default="openrouter/qwen3-8b")
+    p.add_argument("--base-url", default="http://localhost:8001/v1",
+                   help="OpenAI-compatible endpoint for --executor vllm/api (local vLLM)")
+    p.add_argument("--model", default="Qwen/Qwen3-8B",
+                   help="served model name for --executor vllm/api")
+    # Executor decode overrides (default None = use InfshExecutor defaults).
+    # Used to audit the no-memory baseline against the paper's GiGPO config.
+    p.add_argument("--temperature", type=float, default=None)
+    p.add_argument("--top-p", type=float, default=None)
+    p.add_argument("--top-k", type=int, default=None)
+    p.add_argument("--min-p", type=float, default=None)
+    p.add_argument("--presence-penalty", type=float, default=None)
+    p.add_argument("--enable-thinking", dest="enable_thinking", action="store_true", default=None,
+                   help="vLLM Qwen3 thinking mode ON (default: model default)")
+    p.add_argument("--no-thinking", dest="enable_thinking", action="store_false",
+                   help="vLLM Qwen3 thinking mode OFF (paper-analog non-reasoning executor)")
+    p.add_argument("--max-tokens", type=int, default=None)
+    p.add_argument("--reasoning-effort", default=None)
+    p.add_argument("--game-offset", type=int, default=0,
+                   help="skip this many games before evaluating (shard across processes)")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
     ckpt = Path(args.checkpoint)
-    skills_dir = ckpt / "skills"
-    if not skills_dir.is_dir():
-        skills_dir = ckpt.parent / "skills"
-    if not skills_dir.is_dir():
-        raise FileNotFoundError(f"No skills/ under {ckpt} or {ckpt.parent}")
+    skills_dir = resolve_skills_dir(ckpt)
 
     from skillos.skills.repo import SkillRepo
     repo = SkillRepo.load(str(skills_dir))
@@ -56,20 +75,45 @@ def main():
     if len(repo) == 0:
         print("WARNING: empty repo — No Memory baseline.")
 
-    from skillos.envs.config import load_alfworld_config
-    from alfworld.agents.environment import get_environment
-    cfg = load_alfworld_config()
-    AlfredTWEnv = get_environment("AlfredTWEnv")
-    split_map = {"valid_seen": "eval_in_distribution",
-                 "valid_unseen": "eval_out_of_distribution", "train": "train"}
+    from skillos.envs.config import make_alfworld_env, SPLIT_MAP
     bs = min(args.batch_size, args.num_games)
-    env = AlfredTWEnv(cfg, train_eval=split_map[args.split]).init_env(batch_size=bs)
+    env = make_alfworld_env(SPLIT_MAP[args.split], batch_size=bs)
+    # Shard: skip this process's offset of games (resets advance through the
+    # split sequentially). Lets 8 processes each play a distinct slice in
+    # parallel on their own replica/GPU — no shared lockstep barrier.
+    skipped = 0
+    while skipped < args.game_offset:
+        env.reset()
+        skipped += bs
+    if args.game_offset:
+        print(f"[shard] skipped {skipped} games (offset {args.game_offset})", flush=True)
 
     from skillos.executor.executor import create_executor
-    exec_cfg = {"type": args.executor}
-    if args.executor == "infsh":
-        exec_cfg["app"] = args.executor_app
-    executor = create_executor(exec_cfg)
+    # --base-url may be a comma-separated list of replicas (one vLLM server per
+    # GPU); we build one executor per URL and round-robin requests across them.
+    base_urls = [u.strip() for u in args.base_url.split(",") if u.strip()]
+    executors = []
+    for url in (base_urls or [None]):
+        exec_cfg = {"type": args.executor}
+        if args.executor == "infsh":
+            exec_cfg["app"] = args.executor_app
+            for k, v in (("temperature", args.temperature), ("top_p", args.top_p),
+                         ("top_k", args.top_k), ("min_p", args.min_p),
+                         ("max_tokens", args.max_tokens),
+                         ("reasoning_effort", args.reasoning_effort)):
+                if v is not None:
+                    exec_cfg[k] = v
+        elif args.executor in ("vllm", "api"):
+            exec_cfg["base_url"] = url
+            exec_cfg["model"] = args.model
+            for k, v in (("temperature", args.temperature), ("max_tokens", args.max_tokens),
+                         ("top_p", args.top_p), ("top_k", args.top_k), ("min_p", args.min_p),
+                         ("presence_penalty", args.presence_penalty),
+                         ("enable_thinking", args.enable_thinking)):
+                if v is not None:
+                    exec_cfg[k] = v
+        executors.append(create_executor(exec_cfg))
+    print(f"executor: {args.executor} x{len(executors)} replicas; cfg base_urls={base_urls}", flush=True)
 
     out_path = Path(args.out) if args.out else ckpt / f"eval-parallel-{args.split}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +148,7 @@ def main():
                 if done[i]:
                     continue
                 futs[i] = pool.submit(
-                    executor.act,
+                    executors[i % len(executors)].act,
                     task_description=task[i], observation=observation[i],
                     admissible_actions=admissible[i], step_count=steps[i],
                     action_history="\n".join(history[i]), retrieved_skills=skills_text[i],
@@ -146,37 +190,8 @@ def main():
     fout.close()
     pool.shutdown(wait=False)
 
-    # aggregate
-    by_type = defaultdict(list)
-    for r in results:
-        by_type[r["task_type"]].append(r)
-    cols = ["Pick", "Look", "Clean", "Heat", "Cool", "Pick2"]
-    print("\n=== ALFWorld parallel eval — Table 1 row ===")
-    print(f"  {args.split:14s}" + "".join(f" {c:>7s}" for c in cols) + "   Avg SR   Steps")
-    row = f"  skills={len(repo):4d}  "
-    ts, tn, tstep = 0, 0, 0
-    for c in cols:
-        b = by_type.get(c, [])
-        if not b:
-            row += f" {'-':>7s}"; continue
-        sr = sum(1 for x in b if x["success"]) / len(b)
-        row += f" {sr*100:6.1f}%"
-        ts += sum(1 for x in b if x["success"]); tn += len(b); tstep += sum(x["steps"] for x in b)
-    avg_sr = ts / tn if tn else 0
-    row += f"   {avg_sr*100:5.1f}%   {tstep/tn if tn else 0:5.1f}"
-    print(row)
-    print(f"\n  total {len(results)} games in {time.time()-t0:.0f}s  ({(time.time()-t0)/max(len(results),1):.1f}s/game)")
-    print(f"  log: {out_path}")
-    summary = out_path.with_suffix(".summary.json")
-    summary.write_text(json.dumps({
-        "split": args.split, "skills": len(repo), "n_games": len(results),
-        "batch_size": bs, "wall_seconds": time.time() - t0,
-        "avg_success_rate": avg_sr,
-        "by_type": {c: {"n": len(by_type.get(c, [])),
-                        "success_rate": (sum(1 for x in by_type[c] if x["success"]) / len(by_type[c]))
-                        if by_type.get(c) else None} for c in cols},
-    }, indent=2))
-    print(f"  summary: {summary}")
+    report_eval_results(results, args.split, len(repo), out_path,
+                        time.time() - t0, checkpoint=str(ckpt))
 
 
 if __name__ == "__main__":

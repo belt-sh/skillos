@@ -35,16 +35,33 @@ def _is_stream_timeout(err: Exception) -> bool:
     return any(m in msg for m in _STREAM_TIMEOUT_MARKERS)
 
 
+def _is_client_error(err: Exception) -> bool:
+    """4xx errors are deterministic (bad payload, validation) — resubmitting
+    the same params just burns backoff cycles, so treat them as fatal. 408
+    (timeout) and 429 (rate limit) are transient and stay retryable.
+    """
+    code = getattr(err, "status_code", None)
+    return isinstance(code, int) and 400 <= code < 500 and code not in (408, 429)
+
+
 def _attach_to_task(client, task_id: str, max_stream_reconnects: int,
-                    poll_fallback_max_seconds: float, poll_fallback_interval: float):
+                    poll_fallback_max_seconds: float, poll_fallback_interval: float,
+                    wait_timeout: float = 120.0):
     """Wait for an already-submitted task to finish, with stream reconnects
     and a polling fallback. Returns the completed task dict, or raises if
     the task fails / is cancelled / never completes.
+
+    wait_timeout bounds each wait_for_completion call: the SDK (>=0.7.7) takes
+    a `timeout` and does a final GET-poll reconciliation on expiry, so a wedged
+    stream can no longer block forever. We then loop our own reconnects on top.
     """
     last_err: Exception | None = None
     # 1. Try the stream a few times — server keeps running across reconnects.
     for _ in range(max_stream_reconnects + 1):
         try:
+            return client.tasks.wait_for_completion(task_id, timeout=wait_timeout)
+        except TypeError:
+            # Older SDK without the `timeout` kwarg — fall back (may hang).
             return client.tasks.wait_for_completion(task_id)
         except Exception as e:
             last_err = e
@@ -113,6 +130,8 @@ def run_task_resilient(
             submission = client.tasks.run(params, wait=False)
         except Exception as e:
             last_err = e
+            if _is_client_error(e):
+                raise  # bad request — retrying won't help, fail fast
             time.sleep(min(resubmission_backoff_base * (2 ** sub_idx), resubmission_backoff_cap))
             continue
         task_id = submission.get("id") or submission.get("task_id")
@@ -136,6 +155,10 @@ def run_task_resilient(
         except Exception as e:
             last_err = e
             import sys
+            if _is_client_error(e):
+                print(f"[infsh] task {task_id} 4xx client error — not resubmitting: "
+                      f"{type(e).__name__}: {e}", file=sys.stderr)
+                raise
             is_last = sub_idx + 1 >= max_resubmissions
             verb = "GIVING UP" if is_last else "resubmitting"
             print(

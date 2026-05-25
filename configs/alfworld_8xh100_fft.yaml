@@ -1,0 +1,65 @@
+# SkillOS ALFWorld training — 8x H100, FULL fine-tuning (paper-faithful), executor+judge REMOTE.
+#
+# This is the decisive paper-repro experiment: the paper trains the curator with
+# FULL fine-tuning at lr 1e-6 (Table 4). Our LoRA runs (v2 frozen @1e-6, v3 moved
+# @1e-5) plateaued at ~0 held-out lift because the curator wrote over-specific,
+# near-duplicate skills that BM25 mis-retrieves (see tmp/alfworld-v3-diagnosis.md).
+# FFT removes the one deviation from the paper and tests whether full fine-tuning
+# yields better/more-general skills + the headline +13pp.
+#
+# Runs under FSDP FULL_SHARD (configs/accelerate_fsdp.yaml) — DDP would OOM on 8B
+# optimizer states. Launch via ./run_fft.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-v3-fft   # preserves v2 (LoRA 1e-6) and v3 (LoRA 1e-5)
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4), sizes the LR decay to 60
+num_episodes: 3553
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6             # paper's exact value — CORRECT here because this is full FT, not LoRA
+num_generations: 8                # paper GRPO group size
+max_completion_length: 4096
+temperature: 1.0
+# beta=0 → no reference model. The paper discards the KL term for exploration
+# (methods text; Table 4's 0.001 is listed-but-discarded). Also sidesteps a
+# TRL+FSDP bug that mis-places the ref model's device during FSDP wrap. At the
+# observed KL (~0.01) the 0.001 penalty was ~1e-5 of the loss — a no-op change.
+beta: 0.0
+
+use_vllm: false
+
+# FULL fine-tuning — no LoRA adapter; all 8B params train (sharded via FSDP).
+use_lora: false
+
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B), validated thinking-mode (42.9% no-mem baseline).
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper)
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10                    # full-state FSDP saves are heavy; 10 still yields checkpoint-60 with skills
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-fft-v3

@@ -50,35 +50,6 @@ def _populate_state():
         })
 
 
-def _save(ckpt_root: str, rollouts_src: str):
-    """Mirror SkillRepoSaver.on_save() without needing a full Trainer."""
-    import json
-    import shutil
-    os.makedirs(ckpt_root, exist_ok=True)
-    ce._shared_skill_repo.save(f"{ckpt_root}/skills")
-    if os.path.exists(rollouts_src):
-        shutil.copyfile(rollouts_src, f"{ckpt_root}/rollouts.jsonl")
-    with ce._judge_cache_lock:
-        cache_snap = dict(ce._judge_cache)
-    with open(f"{ckpt_root}/judge_cache.json", "w") as f:
-        json.dump(cache_snap, f)
-
-
-def _load(ckpt_root: str):
-    """Mirror SkillRepoLoader.on_train_begin() without a full Trainer."""
-    import json
-    skills_dir = os.path.join(ckpt_root, "skills")
-    loaded = SkillRepo.load(skills_dir)
-    ce._shared_skill_repo.skills = loaded.skills
-    ce._shared_skill_repo._bm25_dirty = True
-    cache_path = os.path.join(ckpt_root, "judge_cache.json")
-    if os.path.isfile(cache_path):
-        with open(cache_path) as f:
-            cache = json.load(f)
-        with ce._judge_cache_lock:
-            ce._judge_cache.update(cache)
-
-
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         ckpt_root = os.path.join(tmp, "checkpoint-7")
@@ -94,8 +65,8 @@ def main():
         assert n_skills_pre == 3, n_skills_pre
         assert n_cache_pre == 3, n_cache_pre
 
-        # 2) save
-        _save(ckpt_root, rollouts_src)
+        # 2) save (exercises the production save path directly)
+        ce.save_curator_state(ckpt_root, rollouts_src)
 
         # Verify expected files landed on disk
         for fn in ["skills/open_cabinet.md", "skills/place_object.md",
@@ -110,8 +81,8 @@ def main():
         assert len(ce._shared_skill_repo) == 0
         assert len(ce._judge_cache) == 0
 
-        # 4) load
-        _load(ckpt_root)
+        # 4) load (exercises the production load path directly)
+        ce.load_curator_state(ckpt_root)
 
         # 5) verify restored
         assert len(ce._shared_skill_repo) == n_skills_pre, (

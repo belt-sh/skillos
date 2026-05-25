@@ -85,6 +85,12 @@ class SkillRepo:
         self._bm25_dirty = True
         return True
 
+    def replace_skills(self, skills: dict[str, Skill]) -> None:
+        """Replace the entire skill set (used when restoring from a checkpoint)
+        and invalidate the BM25 index so the next retrieve() rebuilds it."""
+        self.skills = skills
+        self._bm25_dirty = True
+
     def retrieve(self, query: str, top_k: int = 5) -> list[Skill]:
         """Retrieve top-k skills by BM25 relevance."""
         if not self.skills:

@@ -128,6 +128,9 @@ def train(config: dict):
         use_cpu=not has_cuda,
         bf16=has_cuda,
         gradient_checkpointing=has_cuda,
+        # Non-reentrant checkpointing is required for FSDP full fine-tuning
+        # (reentrant + FSDP errors on the backward); harmless for LoRA/DDP.
+        gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
     if use_vllm:
@@ -139,6 +142,13 @@ def train(config: dict):
     # let TRL pick its own default to avoid hardcoded mismatches.
     if "generation_batch_size" in config:
         grpo_kwargs["generation_batch_size"] = config["generation_batch_size"]
+
+    # Paper trains a fixed number of optimizer steps (Table 4: ALFWorld = 60),
+    # not a full epoch. When set, max_steps overrides num_train_epochs AND sizes
+    # the LR scheduler to that horizon, so the LR decays over exactly the paper
+    # budget instead of over the full 3553-episode epoch.
+    if config.get("max_steps"):
+        grpo_kwargs["max_steps"] = config["max_steps"]
 
     grpo_args = GRPOConfig(**grpo_kwargs)
 
@@ -170,8 +180,6 @@ def train(config: dict):
     # than the pre-crash run.
     from transformers import TrainerCallback
     from skillos.envs import curator_env as _ce
-    import json as _json
-    import shutil as _shutil
 
     class SkillRepoSaver(TrainerCallback):
         """Save skill repo + rollouts.jsonl + judge cache on each checkpoint.
@@ -189,26 +197,7 @@ def train(config: dict):
             if not state.is_world_process_zero:
                 return
             ckpt_root = f"{args.output_dir}/checkpoint-{state.global_step}"
-            _ce._shared_skill_repo.save(f"{ckpt_root}/skills")
-            # Snapshot rollouts.jsonl so post-crash analytics / reward
-            # histories aren't lost.
-            try:
-                if os.path.exists(_ce._rollouts_jsonl_path):
-                    _shutil.copyfile(
-                        _ce._rollouts_jsonl_path,
-                        f"{ckpt_root}/rollouts.jsonl",
-                    )
-            except Exception as e:
-                print(f"[ckpt] rollouts snapshot failed: {e}")
-            # Persist the judge cache so a resumed run doesn't re-pay for
-            # judge calls on content it has already scored.
-            try:
-                with _ce._judge_cache_lock:
-                    cache_snap = dict(_ce._judge_cache)
-                with open(f"{ckpt_root}/judge_cache.json", "w") as f:
-                    _json.dump(cache_snap, f)
-            except Exception as e:
-                print(f"[ckpt] judge cache snapshot failed: {e}")
+            _ce.save_curator_state(ckpt_root, _ce._rollouts_jsonl_path)
 
     class SkillRepoLoader(TrainerCallback):
         """When resuming from a checkpoint, restore the skill repo + judge
@@ -219,10 +208,6 @@ def train(config: dict):
         signal in on_train_begin is `state.global_step > 0`. When that's
         the case, the corresponding checkpoint is at
         `{output_dir}/checkpoint-{global_step}`.
-
-        Rollouts.jsonl is intentionally *not* copied back to the live path —
-        it's snapshotted into the checkpoint for analytics; the live file
-        keeps growing append-only across runs.
         """
 
         def on_train_begin(self, args, state, control, **kwargs):
@@ -232,23 +217,7 @@ def train(config: dict):
             if not os.path.isdir(ckpt):
                 print(f"[resume] no checkpoint at {ckpt}; skipping skill/cache restore")
                 return
-            from skillos.skills.repo import SkillRepo
-            skills_dir = os.path.join(ckpt, "skills")
-            if os.path.isdir(skills_dir):
-                loaded = SkillRepo.load(skills_dir)
-                _ce._shared_skill_repo.skills = loaded.skills
-                _ce._shared_skill_repo._bm25_dirty = True
-                print(f"[resume] loaded {len(loaded.skills)} skills from {skills_dir}")
-            cache_path = os.path.join(ckpt, "judge_cache.json")
-            if os.path.isfile(cache_path):
-                try:
-                    with open(cache_path) as f:
-                        cache = _json.load(f)
-                    with _ce._judge_cache_lock:
-                        _ce._judge_cache.update(cache)
-                    print(f"[resume] restored judge cache: {len(cache)} entries")
-                except Exception as e:
-                    print(f"[resume] judge cache restore failed: {e}")
+            _ce.load_curator_state(ckpt)
 
     trainer.add_callback(SkillRepoSaver())
     trainer.add_callback(SkillRepoLoader())

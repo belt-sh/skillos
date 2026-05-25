@@ -1,0 +1,30 @@
+# FSDP full-shard config for 8B FULL fine-tuning on 8×H100.
+# DDP would OOM (8B Adam states ≈ 112 GB/GPU); FULL_SHARD drops it to ~16 GB/GPU.
+# TRL gathers params once per generation phase, so sharded generation is cheap.
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 8
+rdzv_backend: static
+same_network: true
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+fsdp_config:
+  fsdp_version: 1
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
+  fsdp_sharding_strategy: SHARD_GRAD_OP   # params stay resident (not re-sharded after fwd) → unblocks HF .generate(); shards only grads+optimizer. ~30-40GB/GPU, fits 80GB.
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_use_orig_params: true
+  fsdp_offload_params: false
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_sync_module_states: true
+  fsdp_backward_prefetch: BACKWARD_PRE
+  fsdp_forward_prefetch: false
+  fsdp_activation_checkpointing: false

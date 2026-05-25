@@ -38,7 +38,7 @@ export TRANSFORMERS_OFFLINE=1
 export WANDB_PROJECT=skillos
 export WANDB_ENTITY=okaris
 if [ -n "$CHECKPOINT" ]; then
-  export WANDB_RUN_ID=7nnxt3td
+  export WANDB_RUN_ID=ws8l5g2t   # v2 run (alfworld-8xh100-lora-v2); resume continues this curve
   export WANDB_RESUME=allow
 fi
 
@@ -47,8 +47,9 @@ fi
 export SKILLOS_PARALLEL_ROLLOUTS=16              # threadpool for concurrent rollouts
 export SKILLOS_PARALLEL_JUDGES=16                # threadpool for concurrent judges
 export SKILLOS_EXECUTOR_MAX_STEPS=30             # paper avg trajectory ~21 steps; default was 10 (clipped)
-# Per-future timeouts (curator_env.py): _judge_timeout_s=600, _executor_timeout_s=1200
-# Tightened judge infsh retry (rewards/judge.py): max_resubs=2, ~8min worst case
+# Per-future timeouts and the judge retry budget have their own defaults +
+# rationale in curator_env.py and rewards/judge.py; override them via the
+# SKILLOS_*_TIMEOUT_S / SKILLOS_JUDGE_* env vars here if a run needs it.
 
 # PyTorch CUDA allocator: switch to expandable segments to avoid the
 # fragmentation OOM hit at step 15 on the prior run. The LoRA-on-DDP path

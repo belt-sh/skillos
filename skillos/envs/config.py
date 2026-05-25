@@ -8,6 +8,14 @@ from pathlib import Path
 import yaml
 
 
+# Friendly eval split name -> alfworld's internal train_eval key.
+SPLIT_MAP = {
+    "valid_seen": "eval_in_distribution",
+    "valid_unseen": "eval_out_of_distribution",
+    "train": "train",
+}
+
+
 def load_alfworld_config() -> dict:
     config_path = os.environ.get(
         "ALFWORLD_CONFIG",
@@ -17,11 +25,11 @@ def load_alfworld_config() -> dict:
         return yaml.safe_load(f)
 
 
-def make_alfworld_env(train_eval: str = "train"):
+def make_alfworld_env(train_eval: str = "train", batch_size: int = 1):
     """Create and initialize an ALFWorld TextWorld environment."""
     from alfworld.agents.environment import get_environment
 
     config = load_alfworld_config()
     AlfredTWEnv = get_environment("AlfredTWEnv")
     env = AlfredTWEnv(config, train_eval=train_eval)
-    return env.init_env(batch_size=1)
+    return env.init_env(batch_size=batch_size)

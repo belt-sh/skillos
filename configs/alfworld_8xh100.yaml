@@ -1,4 +1,4 @@
-# SkillOS ALFWorld training — 8x H100, LoRA r=32, executor+judge REMOTE on inference.sh.
+# SkillOS ALFWorld training — 8x H100, LoRA r=128, executor+judge REMOTE on inference.sh.
 #
 # Promotes the proven alfworld_paper.yaml recipe (LoRA + infsh remote) to
 # 8 GPUs via DDP. 32B judge stays remote per user direction; no local vLLM,
@@ -15,14 +15,20 @@
 #     -m skillos.train --config configs/alfworld_8xh100.yaml
 
 model: Qwen/Qwen3-8B
-output_dir: ./output/alfworld-8xh100
+output_dir: ./output/alfworld-8xh100-v3   # fresh paper-budget run; preserves the lr-1e-6 v2 run (ckpt-60-paper) in ./output/alfworld-8xh100-v2
 
 epochs: 1
+max_steps: 60                     # paper trains exactly 60 opt-steps for ALFWORLD (Table 4); overrides epochs + sizes the LR decay to 60
 num_episodes: 3553                # full ALFWorld training split
 batch_size: 2                     # per device — 2 groups per micro-batch run concurrent
                                   # executor trajectories on infsh
 gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
-learning_rate: 1.0e-6
+# Paper Table 4 lists lr 1e-6 — but for FULL fine-tuning. We train a LoRA (r=128),
+# which only nudges a low-rank adapter, so the same nominal LR moves the policy
+# far less. v2 @ 1e-6 left the curator effectively frozen (reward flat over 62
+# steps, 0 eval lift). Scaling 10× to the standard LoRA heuristic so the curator
+# actually learns within the paper's 60-step budget.
+learning_rate: 1.0e-5
 num_generations: 8                # paper GRPO group size
 max_completion_length: 4096
 temperature: 1.0
@@ -38,14 +44,24 @@ lora_alpha: 256
 
 enable_thinking: false
 
-# Frozen executor — REMOTE inference.sh (Qwen3-8B)
+# Frozen executor — REMOTE inference.sh (Qwen3-8B), VALIDATED thinking-mode.
+# These are the settings that produced the best reproduced no-memory baseline:
+# 140-game valid_seen = 42.9% (≈ paper 47.9 ± 1.2, ~1.2σ short), avg 21.5 steps
+# (≈ paper 21.1). The prior `reasoning_effort: none` / `max_tokens: 256` block
+# (steps 1-105, preserved in ./output/alfworld-8xh100) is the lobotomized
+# executor that capped at ~30%; this run trains against the real one.
+# Qwen3-8B HF card thinking mode: temp 0.6 / top_p 0.95 / top_k 20, 32768 ctx.
+# Cost: reasoning-on + 8192 tokens is much slower/costlier per rollout.
 executor:
   type: infsh
   app: openrouter/qwen3-8b
   history_length: 3
-  temperature: 0.7
-  max_tokens: 256
-  context_size: 8192
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
 
 # Content quality judge — REMOTE inference.sh (Qwen3-32B, paper)
 judge:
@@ -62,4 +78,4 @@ save_strategy: steps
 save_steps: 1                     # save adapter + skills + rollouts + judge cache every opt-step
 save_total_limit: 10              # keep last 10 (LoRA r=128 adapter ≈ 100MB → ~1GB total)
 
-wandb_run_name: alfworld-8xh100-lora
+wandb_run_name: alfworld-8xh100-lora-v3
