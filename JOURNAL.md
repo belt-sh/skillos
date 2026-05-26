@@ -21,14 +21,18 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
   `configs/alfworld_8xh100_pathb.yaml`, launcher `run_pathb.sh`.
 - **Setup:** 8×H100, **full fine-tune** of Qwen3-8B curator, vLLM colocate;
   frozen Qwen3-8B executor + Qwen3-32B judge on inference.sh.
-- **Progress:** step 10/60, checkpoint-10 saved (resume-safe).
-- **Reward (train, composite):** climbing gently — steps 5→10 read
-  1.19 → 1.28 → 1.35 → 1.35 → 1.49 → 1.49.
+- **Progress:** reached step 10 (checkpoint-10 saved), then **crashed at ~step 11
+  on a NCCL collective timeout** (additive per-future waits — see Operational
+  hurdles). Fixed with a whole-phase wall budget and **resumed from
+  checkpoint-10**.
+- **Reward (train, composite) up to the crash:** climbing gently — steps 5→10
+  read 1.19 → 1.28 → 1.35 → 1.35 → 1.49 → 1.49 (first-half mean 1.33 →
+  second-half 1.39, +0.06).
 - **Gradient signal:** `frac_reward_zero_std = 0` on *every* step — there is
   real within-group reward variance now (this is the whole point of the Path B
   rebuild; see below). `tools/failure_frequency = 0`, infsh clean.
 - **Cadence:** ~40 min/opt-step (step_time 1330–3275 s). Full 60 steps ≈ ~40 h
-  wall; ~35 h remaining as of this entry.
+  wall.
 - **Held-out lift:** **TBD.** Not yet evaluated. The mechanistic root cause is
   fixed and training reward moves; whether that converts to held-out task
   success is the open question this run exists to answer.
@@ -131,6 +135,20 @@ training repo and measure" eval is invalid under Path B.
 - **Monitor false positives.** Our background watchers matched "failed"/"FAILED"
   in benign infsh "…resubmitting" lines. Fixed by grepping fatal-only patterns
   (`watchdog got stuck|ChildFailedError|exitcode: -|CUDA out of memory`).
+- **NCCL collective timeout from additive per-future waits (the step-11 crash).**
+  After checkpoint-10, rank 3 sat in Python >1800 s between collectives, so the
+  other 7 ranks hit the **real** NCCL collective watchdog (`SeqNum=262
+  _ALLGATHER_BASE, Timeout=1800000 ms`) and aborted (SIGABRT). This is *not* the
+  earlier heartbeat monitor (that fix held) and *not* fixed by `NCCL_TIMEOUT_MS`
+  (a confirmed no-op under accelerate — the timeout was exactly the 1800 s
+  default). Root cause: the reward step gathered each probe future with its *own*
+  `result(timeout=1200 s)`; during an infsh stall (`container exited —
+  resubmitting`) several probes stalled at once and their waits **added up** past
+  1800 s. The per-rollout sentinel bounded each future but not the *phase*. Fix:
+  bound the whole seed-rollout and probe phases with a single shared deadline
+  (`SKILLOS_PHASE_BUDGET_S=1500`, < the 1800 s watchdog), so a phase's wall is
+  capped regardless of how many futures stall; unfinished probes are dropped from
+  `r_task` rather than crashing the job. Checkpoints made the resume free.
 - **Cadence misread.** Early ts-gap clustering suggested ~6 min/step; the
   authoritative tqdm bar shows ~40 min/step. We let the run continue and monitor
   the reward *trend* (the real question) rather than restart for wall time —

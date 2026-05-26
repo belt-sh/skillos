@@ -52,11 +52,18 @@ _judge: Judge = HeuristicJudge()
 _max_steps = int(os.environ.get("SKILLOS_EXECUTOR_MAX_STEPS", "10"))
 _max_parallel_rollouts = int(os.environ.get("SKILLOS_PARALLEL_ROLLOUTS", "16"))
 _max_parallel_judges = int(os.environ.get("SKILLOS_PARALLEL_JUDGES", "16"))
-# Per-future deadlines. Must each be strictly less than the NCCL collective
-# watchdog (default 1800 s) so a single stuck infsh call can't out-wait it
-# and trip the multi-rank watchdog.
+# Per-future deadline: abandon a single stuck infsh call after this so it can't
+# run forever. NOTE: this alone does NOT bound a *phase*. A phase gathers many
+# futures, and waiting on each sequentially makes their timeouts ADD UP — which
+# is exactly what tripped the 1800 s NCCL collective watchdog on 2026-05-26
+# (SeqNum=262 _ALLGATHER_BASE): during an infsh stall several probes each waited
+# their full 1200 s, summing past 1800 s on one rank and killing the 8-rank job.
+# So we ALSO cap the WHOLE-PHASE wall via _phase_budget_s (a single shared
+# deadline across all of a phase's futures), kept safely under the watchdog.
 _executor_timeout_s = float(os.environ.get("SKILLOS_EXECUTOR_TIMEOUT_S", "1200"))
 _judge_timeout_s = float(os.environ.get("SKILLOS_JUDGE_TIMEOUT_S", "600"))
+# Whole-phase wall budget — must be < the NCCL collective watchdog (1800 s).
+_phase_budget_s = float(os.environ.get("SKILLOS_PHASE_BUDGET_S", "1500"))
 _num_generations = 1  # set via configure()
 
 # Path B (transfer-probe r_task): after the curator curates from the seed task's
@@ -73,6 +80,13 @@ _probe_type_sample_cap = int(os.environ.get("SKILLOS_PROBE_TYPE_CAP", "12"))
 _batch_lock = threading.Lock()
 _alfworld_global_lock = threading.Lock()
 _judge_cache_lock = threading.Lock()
+
+# Shared deadline for the current seed-rollout burst. reset() is called once per
+# env (serially by TRL), so per-env timeouts would stack; instead all resets in a
+# contiguous burst share one deadline (= first reset's start + _phase_budget_s)
+# and it's cleared at each opt-step boundary. See _phase_budget_s.
+_reset_deadline: float | None = None
+_reset_deadline_lock = threading.Lock()
 
 # Pools — created lazily on first use.
 _rollout_pool: concurrent.futures.ThreadPoolExecutor | None = None
@@ -384,6 +398,9 @@ def _reset_step_counters(expected_total: int) -> None:
 
 def set_step_expected_rollouts(n: int) -> None:
     """Public hook for train.py to declare batch_size × num_generations."""
+    global _reset_deadline
+    with _reset_deadline_lock:
+        _reset_deadline = None  # fresh seed-rollout budget for the new step
     _reset_step_counters(n)
     _start_heartbeat_once()
 
@@ -711,13 +728,18 @@ def compute_rewards_batched(environments: list) -> list[float]:
         probe_futs.append([
             pool.submit(_run_probe, env._repo, None, _max_steps, s) for s in seeds
         ])
-    # Phase 2: gather successes and compose each reward.
+    # Phase 2: gather successes and compose each reward. All probes ran
+    # concurrently in the pool, so we gather against ONE shared deadline rather
+    # than giving each future its own _executor_timeout_s — otherwise stalled
+    # probes' waits add up and out-wait the NCCL collective watchdog.
+    deadline = time.monotonic() + _phase_budget_s
     rewards = []
     for env, futs in zip(environments, probe_futs):
         successes = []
         for f in futs:
+            remaining = max(0.0, deadline - time.monotonic())
             try:
-                res = f.result(timeout=_executor_timeout_s)
+                res = f.result(timeout=min(_executor_timeout_s, remaining))
                 successes.append(1.0 if res["success"] else 0.0)
             except Exception as e:
                 # A stuck/failed probe degrades that sample's signal rather
@@ -810,8 +832,17 @@ class CuratorEnv:
         self._repo = SkillRepo()
 
         future = self._get_or_submit_group_future()
+        # Bound the whole seed-rollout burst, not just this one future: TRL calls
+        # reset() per env serially, so per-env timeouts would stack past the NCCL
+        # watchdog. All resets since the last step boundary share one deadline.
+        global _reset_deadline
+        with _reset_deadline_lock:
+            now = time.monotonic()
+            if _reset_deadline is None or now > _reset_deadline:
+                _reset_deadline = now + _phase_budget_s
+            budget = max(0.0, _reset_deadline - now)
         try:
-            result = future.result(timeout=_executor_timeout_s)
+            result = future.result(timeout=min(_executor_timeout_s, budget))
         except concurrent.futures.TimeoutError:
             # Don't out-wait the NCCL collective watchdog. Replace the group's
             # future with a resolved sentinel so other slots in this group

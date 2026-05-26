@@ -32,6 +32,11 @@ fi
 export SKILLOS_PARALLEL_ROLLOUTS=40
 export SKILLOS_PARALLEL_JUDGES=24
 export SKILLOS_EXECUTOR_MAX_STEPS=30
+# Whole-phase wall budget (< the 1800s NCCL collective watchdog). This is the
+# REAL guard against the SeqNum=262 _ALLGATHER_BASE crash: per-future timeouts
+# stack across a phase's many probes during an infsh stall and out-wait the
+# watchdog; this caps the whole seed/probe phase regardless of stall count.
+export SKILLOS_PHASE_BUDGET_S=1500
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_TIMEOUT_MS=3600000
 # Transfer-probe + randomized seed tasks make ranks finish their seed/probe
