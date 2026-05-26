@@ -19,6 +19,21 @@ from abc import ABC, abstractmethod
 
 from skillos.curator.prompts import ALFWORLD_EXECUTOR
 
+# Executor infsh retry budget (env vars must be set before import — see run.sh).
+# Kept SHORT on purpose: the executor fires the most infsh calls by far (seed
+# rollouts + transfer probes, ~30 steps each), so the stock run_task_resilient
+# defaults (max_resubmissions=10, poll 900s → ~5.6h/call, up to 10 tasks/call)
+# turn a transient infsh blip into a self-sustaining RESUBMISSION STORM: stuck
+# calls pile new tasks onto inference.sh faster than they drain, the shared
+# rollout pool saturates with zombie episodes, and every probe then times out
+# (r_task → 0, degenerate training). Cap it so a stuck call fails fast (~few
+# min, ≤2 tasks) and the worker frees. Mirrors the judge's already-tamed knobs.
+_EXEC_MAX_STREAM_RECONNECTS = int(os.environ.get("SKILLOS_EXEC_MAX_STREAM_RECONNECTS", "1"))
+_EXEC_POLL_MAX_S = float(os.environ.get("SKILLOS_EXEC_POLL_MAX_S", "150"))
+_EXEC_MAX_RESUBS = int(os.environ.get("SKILLOS_EXEC_MAX_RESUBS", "2"))
+_EXEC_BACKOFF_BASE_S = float(os.environ.get("SKILLOS_EXEC_BACKOFF_BASE_S", "10"))
+_EXEC_BACKOFF_CAP_S = float(os.environ.get("SKILLOS_EXEC_BACKOFF_CAP_S", "30"))
+
 
 def _log_infsh_task(role: str, app: str, task_id: str) -> None:
     """Append task IDs to a NDJSON log so we can query `belt task cost` later.
@@ -243,6 +258,11 @@ class InfshExecutor(Executor):
         result = run_task_resilient(
             self.client, params,
             on_task_id=lambda tid: _log_infsh_task("executor", self.app, tid),
+            max_stream_reconnects=_EXEC_MAX_STREAM_RECONNECTS,
+            poll_fallback_max_seconds=_EXEC_POLL_MAX_S,
+            max_resubmissions=_EXEC_MAX_RESUBS,
+            resubmission_backoff_base=_EXEC_BACKOFF_BASE_S,
+            resubmission_backoff_cap=_EXEC_BACKOFF_CAP_S,
         )
         output = (result or {}).get("output") or {}
         # Qwen3 native reasoning lands in a separate "reasoning" field; the

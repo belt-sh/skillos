@@ -149,6 +149,25 @@ training repo and measure" eval is invalid under Path B.
   (`SKILLOS_PHASE_BUDGET_S=1500`, < the 1800 s watchdog), so a phase's wall is
   capped regardless of how many futures stall; unfinished probes are dropped from
   `r_task` rather than crashing the job. Checkpoints made the resume free.
+- **Retry storm cooked inference.sh (the step 11–17 degenerate window).** After
+  the phase-budget fix the run *survived* but went **degenerate**: ~100% of
+  probes dropped (`64/64` per step), `r_task` collapsed to 0 uniformly, reward
+  pinned at the function-call floor (~1.0) and `frac_reward_zero_std` rose to
+  0.75 — the constant-within-group failure, reintroduced. Root cause: the
+  **executor** called `run_task_resilient` with the stock defaults
+  (`max_resubmissions=10`, `poll=900 s` → ~5.6 h and up to **10 infsh tasks per
+  call**), while the judge was already tamed. A transient infsh blip became a
+  self-sustaining **resubmission storm** — stuck calls piled tasks onto
+  inference.sh faster than they drained; our phase-budget timeouts then
+  abandoned the futures but couldn't kill the threads, so zombie episodes kept
+  retrying *into* the backlog and saturated the shared rollout pool, starving
+  every subsequent probe. (Confirmed jointly: the infsh queue visibly backed up;
+  manually failing the stuck tasks let it drain and drops fell 64 → 8 within a
+  step.) Fix: give the executor the judge's env-tunable, **short** retry budget
+  (`SKILLOS_EXEC_MAX_RESUBS=2`, `SKILLOS_EXEC_POLL_MAX_S=150`, backoff cap 30 s)
+  so a stuck call fails in ~minutes with ≤2 tasks and frees its worker. Lesson:
+  aggressive per-call retry is a metastable-failure amplifier on a shared remote
+  backend — the executor, which fires the most calls, must fail fast.
 - **Cadence misread.** Early ts-gap clustering suggested ~6 min/step; the
   authoritative tqdm bar shows ~40 min/step. We let the run continue and monitor
   the reward *trend* (the real question) rather than restart for wall time —
