@@ -135,8 +135,11 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 - [x] Composite reward function (task + validity + quality + compression)
 - [x] Pluggable executor backends (heuristic / local / vLLM / API)
 - [x] Pluggable judge backends (heuristic / local / vLLM / API)
-- [ ] Grouped task stream data loader wired into training
-- [ ] Single-GPU training with LoRA - full loop completing
+- [x] Full training loop completing on 8×H100 (full fine-tune, vLLM colocate)
+- [x] Within-group transfer signal (Path B transfer-probe `r_task`) — fixes the
+  flat-lift root cause; see `JOURNAL.md` / `DIVERGENCES.md` #11
+- [ ] Paper's soft-Jaccard attribute grouping + evolving task sequence (§3.2.1)
+- [ ] Streaming-curation eval harness (required by Path B; see DIVERGENCES #12)
 - [ ] Match paper's ALFWorld results (target: 61.2% SR)
 
 ### v0.2 - Reasoning + Cross-Domain Transfer

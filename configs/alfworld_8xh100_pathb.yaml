@@ -1,0 +1,78 @@
+# SkillOS ALFWorld training — 8x H100, FULL fine-tuning, PATH B (transfer-probe r_task).
+#
+# Root cause of the flat held-out lift (v2 LoRA, v3 LoRA, v3-fft): r_task was
+# CONSTANT within each GRPO group. The old design ran ONE shared executor
+# trajectory per group (curator_env: "once per group") BEFORE any curation, so
+# the task-success term cancelled out of the within-group GRPO advantage and
+# never trained skill usefulness. The composite climb was driven by r_fc (valid
+# function calls); the judge term contributed a flat ~0.09. See the paper's own
+# Table 3 ablation: grouped/transfer structure is the single most important
+# component (61.2 -> 57.3 without it).
+#
+# Path B fix (pragmatic Algorithm 1, single curation step): each rollout gets its
+# OWN ephemeral repo (paper: S<-empty per group). The curator curates from the
+# seed task's trajectory, then r_task = mean frozen-executor success over
+# `num_probe_tasks` freshly-sampled SAME-TYPE tasks solved with that rollout's
+# curated skills (probes run in parallel in the reward step). Because the N
+# samples curate differently, their r_task differs -> real within-group signal
+# that rewards skills which TRANSFER to related tasks.
+#
+# NOTE: training repos are ephemeral, so there is no persistent training repo to
+# eval. Eval must build memory by running the trained curator over a curation
+# stream (follow-up phase). Launch via ./run_pathb.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-v4-pathb
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4), sizes the LR decay to 60
+num_episodes: 3553
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6             # paper's exact value (full FT)
+num_generations: 8                # paper GRPO group size
+max_completion_length: 4096
+temperature: 1.0
+beta: 0.0
+
+# Path B: transfer-probe r_task. num_probe_tasks same-type probe tasks per
+# rollout, averaged (set to 2 below).
+# Each rollout now triggers 1 seed + num_probe_tasks executor episodes; the
+# remote infsh executor is elastic so the extra inference load is fine.
+num_probe_tasks: 2
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4
+
+use_lora: false
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B)
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper)
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-pathb-v4

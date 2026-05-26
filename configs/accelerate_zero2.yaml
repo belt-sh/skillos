@@ -1,0 +1,27 @@
+# DeepSpeed ZeRO-2 config for 8B FULL fine-tuning on 8×H100.
+# ZeRO-2 partitions optimizer states + gradients across GPUs but keeps PARAMS
+# REPLICATED per GPU — so the curator's HF .generate() runs exactly like the
+# LoRA/DDP path (no FSDP sharded-generation wedge, no vLLM needed). ~32GB/GPU.
+# ZeRO is a pure memory optimization: bit-equivalent to standard full-FT Adam.
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: DEEPSPEED
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 8
+rdzv_backend: static
+same_network: true
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+deepspeed_config:
+  deepspeed_multinode_launcher: standard
+  zero_stage: 2
+  zero3_init_flag: false
+  gradient_accumulation_steps: 2
+  gradient_clipping: 1.0
+  offload_optimizer_device: none
+  offload_param_device: none

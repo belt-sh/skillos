@@ -7,8 +7,11 @@
 # FFT removes the one deviation from the paper and tests whether full fine-tuning
 # yields better/more-general skills + the headline +13pp.
 #
-# Runs under FSDP FULL_SHARD (configs/accelerate_fsdp.yaml) — DDP would OOM on 8B
-# optimizer states. Launch via ./run_fft.sh.
+# Runs under DeepSpeed ZeRO-2 (configs/accelerate_zero2.yaml) — DDP would OOM on 8B
+# optimizer states. Generation goes through vLLM (colocate), which is also what the
+# paper used: HF .generate() under the DeepSpeed engine was ~25-50x slower and blew
+# the 30-min NCCL watchdog (one rank finished a step's generation and timed out
+# waiting on slower ranks). Launch via ./run_fft.sh.
 
 model: Qwen/Qwen3-8B
 output_dir: ./output/alfworld-8xh100-v3-fft   # preserves v2 (LoRA 1e-6) and v3 (LoRA 1e-5)
@@ -28,9 +31,16 @@ temperature: 1.0
 # observed KL (~0.01) the 0.001 penalty was ~1e-5 of the loss — a no-op change.
 beta: 0.0
 
-use_vllm: false
+# vLLM colocate: each rank runs its own vLLM engine (tp=1, data-parallel across
+# the 8 ranks), weights re-synced from the DeepSpeed-replicated training model
+# each step. 0.4 leaves ~48GB/GPU for ZeRO-2 training state while giving vLLM
+# ~16GB weights + ~16GB KV (plenty for the long curator inputs).
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4
 
-# FULL fine-tuning — no LoRA adapter; all 8B params train (sharded via FSDP).
+# FULL fine-tuning — no LoRA adapter; all 8B params train (optimizer+grads sharded
+# via ZeRO-2; params stay replicated so the weight-sync into vLLM is trivial).
 use_lora: false
 
 enable_thinking: false

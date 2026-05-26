@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# SkillOS 8×H100 ALFWorld FULL fine-tuning launcher (FSDP full-shard).
-# Mirrors run.sh's env contract but uses FSDP (configs/accelerate_fsdp.yaml)
+# SkillOS 8×H100 ALFWorld FULL fine-tuning launcher (DeepSpeed ZeRO-2 + vLLM).
+# Mirrors run.sh's env contract but uses ZeRO-2 (configs/accelerate_zero2.yaml)
 # + the FFT training config (configs/alfworld_8xh100_fft.yaml) instead of
-# DDP + LoRA. DDP would OOM on 8B optimizer states.
+# DDP + LoRA. DDP would OOM on 8B optimizer states. Generation runs through
+# vLLM colocate (see the config) — HF .generate() under the DeepSpeed engine
+# was too slow and blew the NCCL watchdog.
 #
 # Usage:
 #   ./run_fft.sh                                       # fresh FFT run
@@ -35,10 +37,10 @@ ts="$(date +%Y%m%d_%H%M%S)"
 LOG="logs/alfworld_8xh100_fft_${ts}.log"
 echo "Launching SkillOS FFT training → $LOG"
 echo "  CHECKPOINT=${CHECKPOINT:-<fresh>}"
-echo "  accelerate=configs/accelerate_fsdp.yaml (FSDP FULL_SHARD)"
+echo "  accelerate=configs/accelerate_zero2.yaml (DeepSpeed ZeRO-2; params replicated → no FSDP gen wedge)"
 echo "  config=configs/alfworld_8xh100_fft.yaml (use_lora=false, lr 1e-6, max_steps 60)"
 
 accelerate launch \
-  --config_file configs/accelerate_fsdp.yaml \
+  --config_file configs/accelerate_zero2.yaml \
   -m skillos.train --config configs/alfworld_8xh100_fft.yaml \
   > "$LOG" 2>&1

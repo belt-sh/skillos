@@ -11,9 +11,23 @@ Living document. Every time the implementation deviates from
 
 Order matters: things at the top affect results most.
 
+> **Current setup (2026-05-26):** we have migrated off the single-GPU/LoRA path.
+> The active run (`configs/alfworld_8xh100_pathb.yaml`, `run_pathb.sh`) is a
+> **full fine-tune of Qwen3-8B on 8×H100 with vLLM colocate**, frozen Qwen3-8B
+> executor + Qwen3-32B judge on inference.sh. Entries below are annotated where
+> this supersedes the original single-GPU framing. The biggest *new* divergence
+> is the **Path B transfer-probe `r_task`** (entry #11) — read `JOURNAL.md` for
+> the why.
+
 ---
 
-## 1. Single GPU, not 16× H100 — *and* LoRA, not full fine-tune
+## 1. ~~Single GPU~~ 8×H100, and ~~LoRA~~ full fine-tune (RESOLVED)
+
+> **Update 2026-05-26:** migrated to 8×H100 + full fine-tune; this is no longer a
+> divergence on the active path. LoRA remains available as a single-GPU fallback.
+> Original entry kept below for history.
+
+### Original entry — Single GPU, not 16× H100 — *and* LoRA, not full fine-tune
 
 This is the biggest deviation. Worth splitting into two parts.
 
@@ -59,7 +73,15 @@ This is the biggest deviation. Worth splitting into two parts.
 - On 8× H100, full FT fits trivially (640 GB aggregate), vLLM compat issues
   may also resolve, and per-step wall time drops ~8×.
 
-## 2. vLLM disabled
+## 2. ~~vLLM disabled~~ vLLM enabled (RESOLVED)
+
+> **Update 2026-05-26:** vLLM is now **enabled** on the 8×H100 path
+> (`use_vllm: true`, `vllm_mode: colocate`, `vllm_gpu_memory_utilization: 0.4`)
+> with the torch 2.11 / transformers 5.9 / trl 1.4 / vllm 0.21 stack, which
+> resolves the compatibility window described below. Original entry kept for
+> history.
+
+### Original entry — vLLM disabled
 
 - **Paper:** uses vLLM (colocate or server mode) for fast rollout generation
 - **Ours:** native HuggingFace `model.generate()` — vLLM 0.11/0.12 collide with
@@ -69,7 +91,7 @@ This is the biggest deviation. Worth splitting into two parts.
 - **Why:** unsolved upstream library compatibility window
 - **Impact:** ~5–10× slower rollout generation. Doesn't change correctness or
   loss trajectory, only wall time. Big.
-- **Status:** `temporary` — revisit when upstreams align
+- **Status:** `resolved` — vLLM colocate active on the 8×H100 stack
 
 ## 3. Executor + judge run on inference.sh (remote API), not local GPUs
 
@@ -96,31 +118,36 @@ This is the biggest deviation. Worth splitting into two parts.
 ## 5. ALFWorld step cap
 
 - **Paper:** "up to 30 steps, but executor only sees last 3 at a time"
-- **Ours:** `SKILLOS_EXECUTOR_MAX_STEPS=10` by default (env var override)
-  — 30 steps × num_generations × num_episodes is prohibitively slow on remote
-  executor API; 10 steps still hits success on most ALFWorld task types
-- **Why:** wall-time and cost
-- **Impact:** Caps task success on harder games (heat/cool/pick2 often need
-  15-20 steps). Our `r_task` will be biased low vs paper. Easy to re-tune.
-- **Status:** `ablation` (revisit when wall time allows)
+- **Ours:** `SKILLOS_EXECUTOR_MAX_STEPS=30` on the active 8×H100 path
+  (`run_pathb.sh`), matching the paper. Default in code is still 10; the env var
+  raises it. (The old 10-step cap biased `r_task` low on heat/cool/pick2.)
+- **Why:** infsh is elastic, so the extra executor steps are affordable now.
+- **Impact:** matches paper's step budget; removes the low-`r_task` bias.
+- **Status:** `resolved` on the 8×H100 path (env override to 30)
 
-## 6. Grouped task streams not yet wired into training
+## 6. Grouped task streams — replaced by Path B transfer-probe (see #11)
 
 - **Paper §3.2.1:** Tasks grouped via soft-Jaccard over attribute annotations
   (topic, skills, concepts, strategies, pitfalls); within a group, repo
   evolves across tasks 1..N and `r_task` averaged over tasks 2..N
-- **Ours:** `data/grouping.py` exists but is a placeholder; training dataset is
-  flat. The shared `_shared_skill_repo` persists across all rollouts without
-  group boundaries — equivalent to one giant "group" the size of the dataset.
-- **Why:** not implemented yet; was on the post-pipeline-validation TODO
-- **Impact:** Significant — paper credits much of the curator's learning to
-  the grouped structure (updates dominate inserts in late training because the
-  curator sees its own skills get reused in adjacent tasks). Without grouping,
-  the learning signal is sparser and the "update > insert" emergence may not
-  show up.
-- **Status:** `temporary` — implement once basic loss-decline is shown
+- **Ours (was):** `data/grouping.py` placeholder; flat dataset; one shared repo
+  across all rollouts — effectively a single group the size of the dataset.
+  This is the root cause of the flat held-out lift (constant within-group
+  `r_task`); see `JOURNAL.md`.
+- **Ours (now):** **Path B** (#11) provides a pragmatic stand-in for the paper's
+  within-group transfer signal — same-type probe tasks per rollout instead of an
+  evolving 1..N sequence. The soft-Jaccard attribute grouping itself is still
+  not implemented (we group by ALFWorld task *type*, which is coarser).
+- **Status:** `temporary` — Path B restores the *signal*; full §3.2.1 attribute
+  grouping + evolving sequence is the escalation if Path B falls short.
 
-## 7. Skill ops mutate shared repo immediately, not per-rollout-atomically
+## 7. ~~Skill ops mutate shared repo~~ per-rollout ephemeral repo (RESOLVED)
+
+> **Update 2026-05-26:** fixed by Path B — each `CuratorEnv` rollout now owns an
+> ephemeral `SkillRepo` (`self._repo`), so parallel rollouts no longer race on a
+> shared repo. Original entry kept for history.
+
+### Original entry — Skill ops mutate shared repo immediately
 
 - **Paper §3.1 (pseudocode):** ops applied to repo sequentially across rollouts
   within a task. Each rollout's reward is computed on the post-op state.
@@ -129,11 +156,8 @@ This is the biggest deviation. Worth splitting into two parts.
   the shared repo.
 - **Why:** simpler implementation; rollouts are mostly empty-output in early
   training so the race is benign
-- **Impact:** correctness drift when curator starts emitting ops in volume. We
-  expect noisier gradients but no failure mode (`SkillRepo` is internally
-  thread-safe; ops just don't compose cleanly).
-- **Status:** `temporary` — implement per-rollout local op buffers when it
-  starts mattering
+- **Impact:** correctness drift when curator starts emitting ops in volume.
+- **Status:** `resolved` — per-rollout ephemeral repo (Path B)
 
 ## 8. Reasoning + WebShop benchmarks not built
 
@@ -181,6 +205,41 @@ This is the biggest deviation. Worth splitting into two parts.
 
 ---
 
+## 11. Path B: transfer-probe `r_task` instead of paper's task-sequence average
+
+- **Paper §3.2.1 / Algorithm 1:** a training instance is a *sequence* of |G|
+  related tasks; the repo evolves across tasks 1..N and
+  `r_task = (1/(|G|−1))·Σ_{i=2}^{N} 1(ξ_i)` (success averaged over tasks 2..N).
+- **Ours (Path B):** single curation step per rollout against an ephemeral repo,
+  then `r_task = mean frozen-executor success over num_probe_tasks (=2)
+  freshly-sampled SAME-TYPE probe tasks`. Probe games are shared within a GRPO
+  group via deterministic `env.seed()`, so the within-group comparison isolates
+  curation quality.
+- **Why:** TRL's tool loop runs serially across the batch; a faithful evolving
+  1..N sequence per rollout multiplies wall time past usability. Path B keeps
+  the part Table 3 says matters most (within-group transfer variance) and drops
+  the expensive part (the long sequence). It is the **direct fix** for the flat
+  held-out lift — the old design's `r_task` was constant within a group and
+  cancelled out of the GRPO advantage. Full narrative in `JOURNAL.md`.
+- **Impact:** restores a non-degenerate task-success gradient (`frac_reward_zero_std=0`
+  every step, confirmed). Coarser than the paper: we group by ALFWorld *type*,
+  not soft-Jaccard attributes, and use 2 probes rather than an N-task average.
+  Held-out lift TBD.
+- **Status:** `ablation` — pragmatic; escalate to full Algorithm 1 if it falls short
+
+## 12. Eval must build memory via streaming curation (not load a saved repo)
+
+- **Consequence of #11:** training repos are now ephemeral, so there is no
+  persisted training repo to evaluate. Eval has to construct memory by running
+  the trained curator over a curation stream (the streaming closed-loop the
+  paper actually uses), then measure executor success with that memory.
+- **Note:** use the **same infsh executor** for eval as for training. The old
+  41%-SR eval ran the executor via vLLM with `presence_penalty=1.5`, which the
+  `InfshExecutor` does *not* send — a train/eval mismatch to avoid.
+- **Status:** `temporary` — new eval harness pending the run finishing.
+
+---
+
 ## Open audit items (verify next time we touch them)
 
 - [x] Reward weights `λ_f=1.0, λ_u=0.1, λ_c=0.05` — confirmed exact match in
@@ -207,8 +266,8 @@ This is the biggest deviation. Worth splitting into two parts.
 - [ ] Top-K skill retrieval = 5 — confirmed in `curator_env.py` (`top_k=5`)
 - [ ] `temperature=1.0` for curator generation — confirmed in configs
 - [ ] `learning_rate=1e-6` — confirmed in configs
-- [ ] `beta=0.001` (GRPO KL coefficient) — added in v3; was previously
-  defaulting to TRL's `beta=0` (no KL term) which is a silent divergence we
-  fixed
+- [ ] `beta` (GRPO KL coefficient) — paper uses 0.001; v3 set 0.001; **Path B
+  config (`alfworld_8xh100_pathb.yaml`) sets `beta: 0.0`** (no KL term, drops the
+  reference model). Confirm whether this is intended or should match the paper.
 - [ ] `steps_per_generation` defaults — TRL default = `gradient_accumulation_steps`;
   paper doesn't specify but this is the standard GRPO convention

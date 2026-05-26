@@ -65,12 +65,11 @@ def build_dataset(num_episodes: int = 1000) -> Dataset:
 
 
 def reward_func(environments: list[CuratorEnv], **kwargs) -> list[float]:
-    """Compute composite reward from each curator environment."""
-    rewards = []
-    for env in environments:
-        env._compute_reward()
-        rewards.append(env.reward)
-    return rewards
+    """Compute composite reward for the batch. Transfer probes for all rollouts
+    run concurrently (network-bound), so reward must be computed batch-wide
+    rather than one env at a time."""
+    from skillos.envs.curator_env import compute_rewards_batched
+    return compute_rewards_batched(environments)
 
 
 def train(config: dict):
@@ -91,6 +90,7 @@ def train(config: dict):
         executor_config=config.get("executor", {"type": "heuristic"}),
         judge_config=config.get("judge", {"type": "heuristic"}),
         num_generations=config.get("num_generations", 4),
+        num_probe_tasks=config.get("num_probe_tasks", 3),
     )
 
     output_dir = config.get("output_dir", "./output/curator")
@@ -136,6 +136,12 @@ def train(config: dict):
     if use_vllm:
         grpo_kwargs["use_vllm"] = True
         grpo_kwargs["vllm_mode"] = config.get("vllm_mode", "colocate")
+        # Colocate tuning knobs — only forward when present so TRL defaults
+        # (gpu_memory_utilization=0.3, tp=1, sleep=off) apply otherwise.
+        for k in ("vllm_gpu_memory_utilization", "vllm_max_model_length",
+                  "vllm_tensor_parallel_size", "vllm_enable_sleep_mode"):
+            if k in config:
+                grpo_kwargs[k] = config[k]
 
     # TRL requires generation_batch_size to be a multiple of the global batch
     # (per_device × num_processes). Only forward an explicit value; otherwise
