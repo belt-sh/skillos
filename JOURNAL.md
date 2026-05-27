@@ -168,6 +168,11 @@ training repo and measure" eval is invalid under Path B.
   so a stuck call fails in ~minutes with ≤2 tasks and frees its worker. Lesson:
   aggressive per-call retry is a metastable-failure amplifier on a shared remote
   backend — the executor, which fires the most calls, must fail fast.
+  **Plus** (`run_task_resilient`): when OUR timeout fires (poll fallback
+  exhausted / stream wedged) the task is still *running on the server*, so we now
+  `client.tasks.cancel(task_id)` before resubmitting or giving up — abandoning it
+  silently is what let live tasks pile up. We skip cancel only when infsh already
+  moved it to a terminal FAILED/CANCELLED state.
 - **Cadence misread.** Early ts-gap clustering suggested ~6 min/step; the
   authoritative tqdm bar shows ~40 min/step. We let the run continue and monitor
   the reward *trend* (the real question) rather than restart for wall time —

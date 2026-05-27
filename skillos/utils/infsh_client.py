@@ -44,6 +44,21 @@ def _is_client_error(err: Exception) -> bool:
     return isinstance(code, int) and 400 <= code < 500 and code not in (408, 429)
 
 
+def _cancel_task(client, task_id: str) -> None:
+    """Best-effort: tell inference.sh to stop a task we've given up on, so the
+    remote worker is freed immediately instead of running to completion
+    unwatched. Critical for storm avoidance — when OUR timeout fires (poll
+    fallback exhausted, stream wedged) the task is still alive on the server;
+    abandoning it without cancelling lets resubmissions pile live tasks onto
+    the backend faster than they drain. Never raises (cancel is advisory)."""
+    try:
+        client.tasks.cancel(task_id)
+    except Exception as e:
+        import sys
+        print(f"[infsh] cancel of abandoned task {task_id} failed (ignored): "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+
+
 def _attach_to_task(client, task_id: str, max_stream_reconnects: int,
                     poll_fallback_max_seconds: float, poll_fallback_interval: float,
                     wait_timeout: float = 120.0):
@@ -159,6 +174,13 @@ def run_task_resilient(
                 print(f"[infsh] task {task_id} 4xx client error — not resubmitting: "
                       f"{type(e).__name__}: {e}", file=sys.stderr)
                 raise
+            # OUR timeout fired (poll fallback exhausted / stream wedged) — the
+            # task is still RUNNING on the server. Cancel it before resubmitting
+            # or giving up, so a task we no longer watch can't keep burning a
+            # remote worker and feeding a resubmission backlog. Skip only when
+            # infsh already moved it to a terminal FAILED/CANCELLED state.
+            if "ended in status" not in str(e):
+                _cancel_task(client, task_id)
             is_last = sub_idx + 1 >= max_resubmissions
             verb = "GIVING UP" if is_last else "resubmitting"
             print(
