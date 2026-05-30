@@ -99,8 +99,14 @@ def train(config: dict) -> None:
         max_completion_length=config.get("max_completion_length", 4096),
         temperature=config.get("temperature", 1.0),
         beta=config.get("beta", 0.0),
-        # Tool loop: paper |G| positions = TRL |G| iterations of the loop.
-        max_tool_calling_iterations=group_size,
+        # Tool loop iterations: G+1 because the first generation is a
+        # priming "empty ops" call (curator hasn't seen any trajectory yet
+        # — reset returns only the session-start instructional prompt),
+        # then G informed generations each emit ops based on the previous
+        # position's trajectory. All G informed generations need to land,
+        # which requires G+1 tool calls. The (G+1)th call runs no executor
+        # — it just applies the final position's ops and terminates.
+        max_tool_calling_iterations=group_size + 1,
         logging_steps=config.get("logging_steps", 1),
         log_completions=True,
         report_to=config.get("report_to", "none"),

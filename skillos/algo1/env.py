@@ -121,9 +121,17 @@ class Algo1CuratorEnv:
         return self._slot // _num_generations
 
     def reset(self, **kwargs: Any) -> str:
-        """Run position-1 executor on this rollout's seed task and return the
-        curator's first input. Subsequent positions are reached via the
-        `curate_and_advance` tool."""
+        """Initialize a new rollout. Returns an instructional prompt for the
+        first curator turn — the curator should emit `curate_and_advance`
+        with an empty operations list to fetch the first task's trajectory.
+
+        IMPORTANT: reset does NOT run the executor. TRL calls reset()
+        serially per rank in a Python for-loop (16 rollouts × 12.5 min =
+        ~200 min wasted as serial executor wall). Instead, position-0's
+        executor runs in the FIRST `curate_and_advance` call, which TRL
+        dispatches via `asyncio.gather` (concurrent across the rank's 16
+        rollouts). This collapses per-step wall from ~33 h to ~2 h.
+        """
         self._position = 0
         self._repo = SkillRepo()
         self._executor_results = []
@@ -136,35 +144,47 @@ class Algo1CuratorEnv:
         # Sample the group's task sequence (shared across N slots in group).
         self._ensure_group_sequence()
 
-        # Run executor at position 0 with empty S (retrieved-skills text
-        # comes from the run itself; will be empty since repo is empty).
-        result = self._run_executor_at(position=0)
-        self._executor_results.append(result)
-
-        curator_input = _build_curator_input(
-            task_description=result["task_description"],
-            past_skills="",
-            trajectory_text=_format_trajectory(result),
-            success=bool(result.get("success")),
+        curator_input = (
+            "## Session Start\n"
+            f"You have {_group_size} ALFWorld tasks to curate skills for. "
+            "Call `curate_and_advance` with `operations=[]` to receive the "
+            "first task's executor trajectory. After each tool response, "
+            "emit one `curate_and_advance` call with curation operations "
+            "(insert/update/delete) based on what helped or hurt the "
+            "executor at that task."
         )
         self._input_tokens = len(curator_input.split())
         return curator_input
 
-    def curate_and_advance(self, operations: list) -> str:
-        """Apply this position's curation ops and advance to the next position.
+    async def curate_and_advance(self, operations: list[dict]) -> str:
+        """Apply curation ops for this position, then advance to the next task.
+
+        Async so TRL's `_tool_call_loop` dispatches one call per rollout via
+        `asyncio.gather` instead of a serial Python for-loop. With sync tools
+        TRL would process this rank's 16 rollouts one-at-a-time, multiplying
+        the per-iteration wall by 16× (~33 h/opt step). With async + threaded
+        executor calls below, all rollouts on a rank fan out concurrently and
+        the iteration wall collapses to max(per-rollout-time).
 
         Args:
-            operations: list of curation op dicts. Each dict has:
-                {"op": "insert" | "update" | "delete",
-                 "skill_name": str,
-                 "content": str (insert only),
-                 "new_name": str (update, optional),
-                 "new_content": str (update, optional)}
+            operations: List of curation operations to apply this position.
+                Each item is an object with fields: `op` (one of "insert",
+                "update", "delete"), `skill_name` (string), and optional
+                fields `content` (insert), `new_name`/`new_content` (update).
+                Pass an empty list to advance without changing the repo.
 
-        Returns the next position's curator input, or a rollout-complete
-        marker once the group's |G| positions are exhausted.
+        Returns:
+            The next position's curator input as a string, or a
+            rollout-complete marker once all G positions have been played.
         """
-        # 1) Apply all ops from this position to S.
+        # State machine: self._position counts executor episodes already
+        # COMPLETED on this rollout (0..|G|). Each call to this method
+        # finishes one more episode. Reset has run zero episodes; the first
+        # tool call runs position 0 (so the model can see task 0's
+        # trajectory); the last (Gth) call runs position G-1.
+
+        # 1) Apply this position's curation ops to S. Empty/no-op on the
+        # very first call (model hasn't seen any task yet).
         valid_count = 0
         for op in operations or []:
             applied_valid = self._apply_op(op)
@@ -175,24 +195,24 @@ class Algo1CuratorEnv:
             "valid": valid_count,
         })
 
-        # 2) Advance position.
-        self._position += 1
-
+        # 2) Check if all G episodes have completed.
         if self._position >= _group_size:
-            # End of rollout — caller (reward step) will finalize.
             self.done = True
             return (
-                f"[rollout complete] position {self._position}/{_group_size} "
-                f"reached. final repo size = {len(self._repo)} skills."
+                f"[rollout complete] {self._position}/{_group_size} tasks "
+                f"played. final repo size = {len(self._repo)} skills."
             )
 
-        # 3) Run executor at the new position. Retrieval happens INSIDE
-        # _run_executor_on_env using the live self._repo (i.e. the repo as
-        # updated by step 1's ops). result["skills_text"] echoes what was
-        # retrieved + shown to the executor, which is what we surface as
-        # past_skills in the next curator input.
-        result = self._run_executor_at(position=self._position)
+        # 3) Run executor at the next position. Wrap the blocking
+        # _run_executor_at in asyncio.to_thread so this coroutine yields
+        # while infsh I/O is pending. TRL's gather interleaves all 16
+        # rollouts on a rank concurrently; without the await, async def is
+        # a no-op for parallelism. ~16× speedup per rank vs sync sequential.
+        import asyncio
+        position = self._position
+        result = await asyncio.to_thread(self._run_executor_at, position)
         self._executor_results.append(result)
+        self._position += 1
 
         return _build_curator_input(
             task_description=result["task_description"],
