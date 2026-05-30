@@ -1,0 +1,346 @@
+"""Algorithm 1 multi-position CuratorEnv (paper §3.1-3.2).
+
+Single mega-tool per position: `curate_and_advance(operations)` is the only
+tool the curator may call. Each call:
+  1. applies its `operations` (list of {op, skill_name, content?, new_*?}) to
+     this rollout's per-slot SkillRepo S
+  2. advances position k -> k+1
+  3. if k+1 < |G|: runs the frozen executor on the next task ξ_{k+1} with
+     skills retrieved from the updated S, and returns the trajectory text as
+     the tool response (this is the next position's curator input)
+  4. if k+1 == |G|: terminates the rollout and returns a short final summary
+
+r_task is computed at finalize as mean executor success over positions
+2..|G| (position 1's executor ran on empty S so it can't reflect curator
+contribution).
+
+Group coordination: 8 slots in the same GRPO group share the same task
+sequence (same `_group_id`). Within a group, slots run independent rollouts
+(their own S, their own executor calls). Across groups, sequences differ.
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
+import os
+import sys
+import threading
+import time
+from typing import Any
+
+from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE
+from skillos.skills.repo import SkillRepo
+
+# --- Module-level state (mirrors envs.curator_env structure) ----------------
+
+_instances: list["Algo1CuratorEnv"] = []
+_num_generations: int = 8     # paper N=8; overridden by configure()
+_group_size: int = 10         # paper |G|=10; overridden by configure()
+_batch_lock = threading.Lock()
+
+# Group-level task sequence registry: {group_id: [seed_int, ...] of length G}.
+# All N slots in a group look up the same sequence so they walk identical
+# ξ_1..ξ_G but build independent repos.
+_group_sequences: dict[int, list[int]] = {}
+_group_types: dict[int, str] = {}
+
+# Executor + judge client handles; populated by configure().
+_executor = None
+_judge_submit = None  # callable: content_str -> Future[float]
+
+# Phase budget across all of a step's position-1 executor calls; shared
+# deadline so per-slot timeouts don't stack past the NCCL watchdog.
+_phase_budget_s: float = float(os.environ.get("SKILLOS_PHASE_BUDGET_S", "1500"))
+_executor_timeout_s: float = float(os.environ.get("SKILLOS_EXECUTOR_TIMEOUT_S", "900"))
+_judge_timeout_s: float = float(os.environ.get("SKILLOS_JUDGE_TIMEOUT_S", "60"))
+
+
+def configure(*, executor, judge_submit, num_generations: int, group_size: int) -> None:
+    """Wire the env to a configured executor/judge and pin the GRPO/G sizes."""
+    global _executor, _judge_submit, _num_generations, _group_size
+    _executor = executor
+    _judge_submit = judge_submit
+    _num_generations = num_generations
+    _group_size = group_size
+
+
+# --- Helpers ---------------------------------------------------------------
+
+def _format_trajectory(result: dict) -> str:
+    parts = []
+    for step in result.get("trajectory", []):
+        parts.append(f"Step {step['step']}: ACTION: {step['action']}")
+        parts.append(f"        OBSERVATION: {step['observation']}")
+    return "\n".join(parts)
+
+
+def _build_curator_input(task_description: str, past_skills: str,
+                         trajectory_text: str, success: bool) -> str:
+    return CURATOR_INPUT_TEMPLATE.format(
+        task_description=task_description,
+        past_skills=past_skills,
+        agent_trajectory=trajectory_text,
+        result="Success" if success else "Failure",
+    )
+
+
+# --- Env -------------------------------------------------------------------
+
+class Algo1CuratorEnv:
+    """One rollout = one walk through |G| positions.
+
+    TRL discovers the single tool method `curate_and_advance`. Reset returns
+    position 0's curator input. Each tool call advances the position and
+    returns the next position's input (or rollout-complete).
+    """
+
+    def __init__(self):
+        self._slot = len(_instances)
+        _instances.append(self)
+
+        self._position: int = 0
+        self._repo = SkillRepo()
+        self._executor_results: list[dict] = []
+        self._ops_applied: list[dict] = []           # all ops across all positions
+        self._curator_outputs_meta: list[dict] = []  # per-position: ops_count, valid_count
+        self._judge_futures: list[concurrent.futures.Future] = []
+        self._input_tokens: int = 0
+
+        # Per-rollout group-shared task sequence (populated on first reset).
+        self._task_seeds: list[int] = []
+        self._task_descriptions: list[str] = []
+        self._group_type: str = "pick"
+
+        self.reward = 0.0
+        self.done = False
+
+    # ---- TRL hooks ----------------------------------------------------
+
+    @property
+    def _group_id(self) -> int:
+        return self._slot // _num_generations
+
+    def reset(self, **kwargs: Any) -> str:
+        """Run position-1 executor on this rollout's seed task and return the
+        curator's first input. Subsequent positions are reached via the
+        `curate_and_advance` tool."""
+        self._position = 0
+        self._repo = SkillRepo()
+        self._executor_results = []
+        self._ops_applied = []
+        self._curator_outputs_meta = []
+        self._judge_futures = []
+        self.reward = 0.0
+        self.done = False
+
+        # Sample the group's task sequence (shared across N slots in group).
+        self._ensure_group_sequence()
+
+        # Run executor at position 0 with empty S (retrieved-skills text
+        # comes from the run itself; will be empty since repo is empty).
+        result = self._run_executor_at(position=0)
+        self._executor_results.append(result)
+
+        curator_input = _build_curator_input(
+            task_description=result["task_description"],
+            past_skills="",
+            trajectory_text=_format_trajectory(result),
+            success=bool(result.get("success")),
+        )
+        self._input_tokens = len(curator_input.split())
+        return curator_input
+
+    def curate_and_advance(self, operations: list) -> str:
+        """Apply this position's curation ops and advance to the next position.
+
+        Args:
+            operations: list of curation op dicts. Each dict has:
+                {"op": "insert" | "update" | "delete",
+                 "skill_name": str,
+                 "content": str (insert only),
+                 "new_name": str (update, optional),
+                 "new_content": str (update, optional)}
+
+        Returns the next position's curator input, or a rollout-complete
+        marker once the group's |G| positions are exhausted.
+        """
+        # 1) Apply all ops from this position to S.
+        valid_count = 0
+        for op in operations or []:
+            applied_valid = self._apply_op(op)
+            valid_count += int(applied_valid)
+        self._curator_outputs_meta.append({
+            "position": self._position,
+            "ops": len(operations or []),
+            "valid": valid_count,
+        })
+
+        # 2) Advance position.
+        self._position += 1
+
+        if self._position >= _group_size:
+            # End of rollout — caller (reward step) will finalize.
+            self.done = True
+            return (
+                f"[rollout complete] position {self._position}/{_group_size} "
+                f"reached. final repo size = {len(self._repo)} skills."
+            )
+
+        # 3) Run executor at the new position. Retrieval happens INSIDE
+        # _run_executor_on_env using the live self._repo (i.e. the repo as
+        # updated by step 1's ops). result["skills_text"] echoes what was
+        # retrieved + shown to the executor, which is what we surface as
+        # past_skills in the next curator input.
+        result = self._run_executor_at(position=self._position)
+        self._executor_results.append(result)
+
+        return _build_curator_input(
+            task_description=result["task_description"],
+            past_skills=result.get("skills_text", ""),
+            trajectory_text=_format_trajectory(result),
+            success=bool(result.get("success")),
+        )
+
+    # ---- Op application -----------------------------------------------
+
+    def _apply_op(self, op: dict) -> bool:
+        """Apply one curation op to self._repo, record for r_fc, fire judge.
+        Returns True if the op was valid + executed."""
+        if not isinstance(op, dict):
+            self._ops_applied.append({"name": "invalid", "valid": False})
+            return False
+        kind = (op.get("op") or "").lower()
+        name = op.get("skill_name", "")
+        if kind == "insert":
+            content = op.get("content", "")
+            ok = self._repo.insert(name, content) if (name and content) else False
+            self._ops_applied.append({
+                "name": "new_skill_insert",
+                "arguments": {"skill_name": name, "content": content},
+                "valid": ok,
+            })
+            if ok and content and _judge_submit is not None:
+                self._judge_futures.append(_judge_submit(content))
+            return ok
+        if kind == "update":
+            new_name = op.get("new_name") or None
+            new_content = op.get("new_content") or None
+            ok = self._repo.update(name, new_name=new_name, new_content=new_content) if name else False
+            self._ops_applied.append({
+                "name": "skill_update",
+                "arguments": {"skill_name": name, "new_content": new_content or ""},
+                "valid": ok,
+            })
+            if ok and new_content and _judge_submit is not None:
+                self._judge_futures.append(_judge_submit(new_content))
+            return ok
+        if kind == "delete":
+            ok = self._repo.delete(name) if name else False
+            self._ops_applied.append({
+                "name": "skill_delete",
+                "arguments": {"skill_name": name},
+                "valid": ok,
+            })
+            return ok
+        self._ops_applied.append({"name": f"unknown:{kind}", "valid": False})
+        return False
+
+    # ---- Group sequence sampling --------------------------------------
+
+    def _ensure_group_sequence(self) -> None:
+        """Populate `self._task_seeds` for the |G| tasks this group walks
+        through. Cached per group_id so the N slots in a GRPO group share an
+        identical sequence."""
+        # Reuse the existing same-type seed index from envs.curator_env so we
+        # don't duplicate the one-time 400-seed ALFWorld bucketing scan.
+        # NB: access via the module (not `from ... import _type_seeds`)
+        # because `_build_type_seed_index` REASSIGNS the module attribute and
+        # a `from`-import would snapshot the old empty dict.
+        from skillos.envs import curator_env as _classic
+        if not _classic._type_seeds:
+            _classic._build_type_seed_index()
+
+        from skillos.algo1.data import sample_group_seeds
+
+        class _SeedIndexAdapter:
+            def seeds_for_type(self, t: str) -> list[int]:
+                return _classic._type_seeds.get(t) or _classic._type_seeds.get("pick") or []
+
+        gid = self._group_id
+        with _batch_lock:
+            if gid in _group_sequences:
+                self._task_seeds = list(_group_sequences[gid])
+                self._group_type = _group_types[gid]
+            else:
+                ttype = _group_types.get(gid, "pick")
+                self._task_seeds = sample_group_seeds(
+                    group_id=gid, task_type=ttype, group_size=_group_size,
+                    seed_index=_SeedIndexAdapter())
+                self._group_type = ttype
+                _group_sequences[gid] = list(self._task_seeds)
+                _group_types[gid] = ttype
+        self._task_descriptions = [""] * _group_size
+
+    # ---- Executor invocation ------------------------------------------
+
+    def _run_executor_at(self, position: int) -> dict:
+        """Run frozen executor on this group's task at `position`. Reuses
+        _run_probe from envs.curator_env, which handles env borrow/return,
+        retrieval from self._repo, and the per-step executor loop."""
+        from skillos.envs.curator_env import _run_probe, _max_steps
+        seed = self._task_seeds[position]
+        try:
+            result = _run_probe(self._repo, None, _max_steps, seed)
+        except Exception as e:
+            print(f"[algo1] executor failed slot={self._slot} group={self._group_id} "
+                  f"position={position}: {type(e).__name__}: {e}",
+                  file=sys.stderr, flush=True)
+            result = {
+                "task_description": f"<executor-error-position-{position}>",
+                "trajectory": [], "success": False, "steps": 0,
+                "gamefile": "", "skills_text": "",
+            }
+        self._task_descriptions[position] = result.get("task_description", "")
+        return result
+
+    # ---- Reward -------------------------------------------------------
+
+    def _finalize_reward(self) -> float:
+        """Compose r = r_task + r_fc + λ_u·r_cnt + λ_c·r_comp.
+
+        r_task = mean executor success over positions 2..|G|. The seed
+        position (index 0) is excluded — it ran with empty S and credits no
+        curator action."""
+        from skillos.rewards.composite import (
+            composite_reward, reward_compression, reward_function_call,
+        )
+
+        # r_task — mean over positions 2..|G| (1-indexed in the paper). We
+        # use 1..G-1 here (0-indexed). For G=1 this is degenerate; assert.
+        if len(self._executor_results) <= 1:
+            r_task = float(self._executor_results[0].get("success", 0.0)) if self._executor_results else 0.0
+        else:
+            tail = self._executor_results[1:]
+            successes = [float(r.get("success", 0.0)) for r in tail]
+            r_task = sum(successes) / len(successes)
+
+        r_fc = reward_function_call(self._ops_applied)
+
+        r_cnt = 0.0
+        if self._judge_futures:
+            scores = []
+            for f in self._judge_futures:
+                try:
+                    scores.append(f.result(timeout=_judge_timeout_s))
+                except concurrent.futures.TimeoutError:
+                    print(f"[algo1] judge timeout after {_judge_timeout_s:.0f}s; dropping score",
+                          file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[algo1] judge failed ({type(e).__name__}: {e}); dropping score",
+                          file=sys.stderr, flush=True)
+            r_cnt = sum(scores) / len(scores) if scores else 0.0
+
+        r_comp = reward_compression(self._repo.total_tokens(), max(self._input_tokens, 1))
+
+        self.reward = composite_reward(r_task, r_fc, r_cnt, r_comp)
+        return self.reward

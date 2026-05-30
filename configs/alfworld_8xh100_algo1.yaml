@@ -1,0 +1,75 @@
+# SkillOS ALFWorld training — 8x H100, FULL fine-tuning, PAPER ALGORITHM 1.
+#
+# Multi-position rollout (paper §3.1, Algorithm 1): each training instance is
+# a sequence of |G|=10 related ALFWorld tasks. Per rollout, the curator emits
+# ONE `curate_and_advance(operations)` tool call at each of the 10 positions;
+# the env applies ops to a per-rollout SkillRepo S and runs the frozen
+# executor at the next position with skills retrieved from updated S.
+# r_task = mean executor success over positions 2..|G|. Composite reward and
+# remaining terms unchanged from Path B.
+#
+# Why a single mega-tool instead of paper's three (insert/update/delete)?
+# TRL's _tool_call_loop counts ITERATIONS not positions; one mega-tool per
+# position guarantees one iteration = one position. Curator is retrained
+# from scratch on this schema (the pathbv4 checkpoint had a different
+# schema and is discarded).
+#
+# Launch via ./run_algo1.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-algo1
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4)
+num_episodes: 3553                # paper training split
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6             # paper exact
+num_generations: 8                # paper GRPO group size N=8
+max_completion_length: 4096       # paper Max Response Length
+temperature: 1.0                  # paper rollout temperature
+beta: 0.0
+
+# Algorithm 1 specifics.
+group_size: 10                    # paper |G|=10 (Data Grouping Size)
+algo1_use_mega_tool: true         # single curate_and_advance(operations)
+# max_tool_calling_iterations is set by the trainer to group_size.
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4
+
+use_lora: false
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B). User constraint: all 8
+# GPUs stay on training; executor stays remote despite the per-call network
+# round-trip cost. Algorithm 1 means ~3.3x more executor calls per opt step
+# than Path B; expect ~80-90 min/step on 8 GPUs vs paper's 16-GPU pace.
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper).
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-algo1-v1
