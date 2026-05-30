@@ -21,27 +21,30 @@ Same `infsh` Qwen3-8B executor as training — do NOT swap in the vLLM +
 presence_penalty=1.5 config from the prior 41% eval; that train/eval mismatch
 is what corrupted the previous read. See DIVERGENCES.md #12.
 
+`--batch-size K` (default 1 = strict per-task serial, paper-literal) runs K
+games concurrently against the SAME repo snapshot, then runs the curator
+serially over the wave's K trajectories before the next wave. This is a
+documented deviation from strict per-task ordering — memory updates happen at
+wave boundaries instead of after every task — for a ~K× wall-clock speedup.
+Within-wave games don't see each other's curation; across waves the repo still
+accumulates. Set K=1 for paper-literal serial.
+
 Usage:
   python -m scripts.eval_streaming_curation --mode no_memory \\
-      --num-games 140 --split valid_seen \\
+      --num-games 140 --split valid_seen --batch-size 20 \\
       --out output/eval-pathbv4/no_memory.jsonl
 
   python -m scripts.eval_streaming_curation --mode closed_loop \\
       --curator-checkpoint output/alfworld-8xh100-v4-pathb \\
-      --num-games 140 --split valid_seen \\
+      --num-games 140 --split valid_seen --batch-size 20 \\
       --out output/eval-pathbv4/ckpt60.jsonl
-
-  python -m scripts.eval_streaming_curation --mode closed_loop \\
-      --curator-checkpoint output/alfworld-8xh100-v4-pathb/checkpoint-10 \\
-      --num-games 140 --split valid_seen \\
-      --out output/eval-pathbv4/ckpt10.jsonl
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
-import os
 import sys
 import time
 from collections import defaultdict, deque
@@ -108,50 +111,77 @@ def _format_trajectory(traj_steps: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def run_executor_episode_with_trace(env, executor, repo, max_steps: int,
-                                    history_length: int = 3) -> dict:
-    """Same protocol as scripts.eval_alfworld.run_episode but also captures the
-    per-step trajectory text so we can hand it to the curator afterwards."""
+def run_executor_wave_with_trace(env, executors, repo, max_steps: int, pool,
+                                 history_length: int = 3) -> list[dict]:
+    """Run one wave of `env.batch_size` games concurrently against the current
+    repo snapshot. Mirrors scripts.eval_alfworld_parallel: the ALFWorld env is
+    stepped single-threaded; only the network-bound executor calls run
+    concurrently (one inference.sh request per active game per step round).
+
+    Returns an ordered list of per-game result dicts (one entry per env slot)
+    with the same schema as the prior serial run_executor_episode_with_trace.
+    All games in a wave retrieve skills from the SAME repo snapshot — paper-
+    faithful per-task ordering only holds at wave boundaries.
+    """
     obs, infos = env.reset()
-    observation = obs[0]
-    admissible = infos.get("admissible_commands", [[]])[0]
-    task = extract_task_description(observation)
-    gamefile = (infos.get("extra.gamefile") or [""])[0]
-    task_type = classify_task(gamefile)
+    n = len(obs)
+    observation = list(obs)
+    admissible = [infos.get("admissible_commands", [[]])[i] for i in range(n)]
+    task = [extract_task_description(observation[i]) for i in range(n)]
+    gamefile = [(infos.get("extra.gamefile") or [""] * n)[i] for i in range(n)]
+    task_type = [classify_task(gamefile[i]) for i in range(n)]
+    retrieved_lists = [repo.retrieve(task[i], top_k=5) for i in range(n)]
+    skills_text = [repo.format_skills(r) if r else "" for r in retrieved_lists]
+    history = [deque(maxlen=history_length) for _ in range(n)]
+    traj: list[list[dict]] = [[] for _ in range(n)]
+    done = [False] * n
+    success = [False] * n
+    steps = [0] * n
 
-    retrieved = repo.retrieve(task, top_k=5)
-    skills_text = repo.format_skills(retrieved) if retrieved else ""
-    n_retrieved = len(retrieved)
-
-    history: deque[str] = deque(maxlen=history_length)
-    traj: list[dict] = []
-    done = False
-    success = False
-    step = 0
-    while not done and step < max_steps:
-        action = executor.act(
-            task_description=task,
-            observation=observation,
-            admissible_actions=admissible,
-            step_count=step,
-            action_history="\n".join(history),
-            retrieved_skills=skills_text,
-        )
-        obs_n, scores, dones, infos = env.step([action])
-        new_obs = obs_n[0]
-        step += 1
-        traj.append({"step": step, "action": action, "observation": new_obs})
-        observation = new_obs
-        admissible = infos.get("admissible_commands", [[]])[0]
-        done = dones[0]
-        history.append(f"ACTION: {action}\nOBSERVATION: {observation}")
-        if done:
-            success = scores[0] > 0
-    return {
-        "task_type": task_type, "success": success, "steps": step,
-        "task": task, "gamefile": gamefile, "trajectory": traj,
-        "n_retrieved": n_retrieved,
-    }
+    rnd = 0
+    while not all(done) and rnd < max_steps:
+        rnd += 1
+        futs: dict[int, concurrent.futures.Future] = {}
+        for i in range(n):
+            if done[i]:
+                continue
+            futs[i] = pool.submit(
+                executors[i % len(executors)].act,
+                task_description=task[i], observation=observation[i],
+                admissible_actions=admissible[i], step_count=steps[i],
+                action_history="\n".join(history[i]), retrieved_skills=skills_text[i],
+            )
+        actions: list[str] = []
+        for i in range(n):
+            if done[i]:
+                actions.append("look")  # batched env.step needs an action per slot
+                continue
+            try:
+                actions.append(futs[i].result())
+            except Exception as e:
+                print(f"  [warn] executor failed slot {i}: {type(e).__name__}: {e}",
+                      file=sys.stderr, flush=True)
+                actions.append(admissible[i][0] if admissible[i] else "look")
+        obs_n, scores, dones, infos = env.step(actions)
+        for i in range(n):
+            if done[i]:
+                continue
+            observation[i] = obs_n[i]
+            admissible[i] = infos.get("admissible_commands", [[]])[i]
+            steps[i] += 1
+            traj[i].append({"step": steps[i], "action": actions[i], "observation": observation[i]})
+            history[i].append(f"ACTION: {actions[i]}\nOBSERVATION: {observation[i]}")
+            if dones[i]:
+                done[i] = True
+                success[i] = scores[i] > 0
+    return [
+        {
+            "task_type": task_type[i], "success": success[i], "steps": steps[i],
+            "task": task[i], "gamefile": gamefile[i], "trajectory": traj[i],
+            "n_retrieved": len(retrieved_lists[i]),
+        }
+        for i in range(n)
+    ]
 
 
 class CuratorInference:
@@ -178,17 +208,23 @@ class CuratorInference:
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.enable_thinking = enable_thinking
-        # Lazy-imported here so the parser code path matches training exactly.
-        from skillos.curator.model import parse_tool_calls, apply_curation_ops
+        # Use TRL's response parser — it reads tokenizer.response_schema to
+        # decode <tool_call>...</tool_call> blocks the same way training did.
+        # The legacy regex parse_tool_calls in skillos.curator.model never
+        # matched real Qwen3 tool-call output (lookahead required `{` or EOF
+        # after `}`, but the model emits `}\n</tool_call>`).
+        from trl.chat_template_utils import add_response_schema, parse_response
+        add_response_schema(self.tok)
+        self._parse_response = parse_response
+        from skillos.curator.model import apply_curation_ops, CurationOp
         from skillos.curator.prompts import CURATOR_SYSTEM, CURATOR_INPUT_TEMPLATE
-        self._parse = parse_tool_calls
         self._apply = apply_curation_ops
+        self._CurationOp = CurationOp
         self._system = CURATOR_SYSTEM
         self._template = CURATOR_INPUT_TEMPLATE
 
     def curate(self, repo, traj_result: dict) -> dict:
         """Generate curation ops for one trajectory and apply them to `repo`."""
-        # Past-skills view = what the curator would see retrieved for THIS task.
         past = repo.retrieve(traj_result["task"], top_k=5)
         past_text = repo.format_skills(past) if past else ""
         traj_text = _format_trajectory(traj_result["trajectory"])
@@ -202,26 +238,53 @@ class CuratorInference:
             {"role": "system", "content": self._system},
             {"role": "user", "content": user},
         ]
-        input_ids = self.tok.apply_chat_template(
+        # With `tools=`, apply_chat_template returns a BatchEncoding (dict-like)
+        # whose __getattr__ raises empty AttributeError on .shape — passing it
+        # straight to generate() fails. Pull input_ids + attention_mask out.
+        enc = self.tok.apply_chat_template(
             messages,
             tools=TOOLS_SCHEMA,
             add_generation_prompt=True,
             return_tensors="pt",
+            return_dict=True,
             chat_template_kwargs={"enable_thinking": self.enable_thinking},
-        ).to(self.model.device)
+        )
+        input_ids = enc["input_ids"].to(self.model.device)
+        attn_mask = enc.get("attention_mask")
+        if attn_mask is not None:
+            attn_mask = attn_mask.to(self.model.device)
         gen_kwargs = dict(
             max_new_tokens=self.max_new_tokens,
             pad_token_id=self.tok.eos_token_id,
         )
+        if attn_mask is not None:
+            gen_kwargs["attention_mask"] = attn_mask
         if self.temperature and self.temperature > 0:
             gen_kwargs.update(do_sample=True, temperature=float(self.temperature))
         else:
             gen_kwargs.update(do_sample=False)
         with self._torch.inference_mode():
             out = self.model.generate(input_ids, **gen_kwargs)
-        gen = out[0, input_ids.shape[1]:]
-        response = self.tok.decode(gen, skip_special_tokens=True)
-        ops = self._parse(response)
+        gen_ids = out[0, input_ids.shape[1]:].tolist()
+        parsed = self._parse_response(self.tok, gen_ids)
+        tool_calls = parsed.get("tool_calls") or []
+        ops = []
+        for tc in tool_calls:
+            fn = tc.get("function") if tc.get("type") == "function" else None
+            if not fn:
+                continue
+            name = fn.get("name", "")
+            if name not in ("new_skill_insert", "skill_update", "skill_delete"):
+                continue
+            args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                # Tolerate arguments accidentally serialized as a JSON string.
+                import json as _json
+                try:
+                    args = _json.loads(args)
+                except Exception:
+                    args = {}
+            ops.append(self._CurationOp(name=name, arguments=args))
         size_before = len(repo)
         applied = self._apply(repo, ops)
         return {
@@ -230,7 +293,7 @@ class CuratorInference:
             "repo_size_before": size_before,
             "repo_size_after": len(repo),
             "repo_tokens_after": repo.total_tokens(),
-            "response_chars": len(response),
+            "response_chars": len(parsed.get("content", "")),
         }
 
 
@@ -247,6 +310,10 @@ def main():
                    choices=["valid_seen", "valid_unseen", "train"])
     p.add_argument("--num-games", type=int, default=140,
                    help="Paper's ALFWorld test set = 140 valid_seen tasks.")
+    p.add_argument("--batch-size", type=int, default=1,
+                   help="Games run concurrently per wave. K=1 = strict paper-literal serial. "
+                        "K>1 = wave-batched: K games share the same repo snapshot, curator "
+                        "runs serially between waves. ~K× faster, small deviation.")
     p.add_argument("--max-steps", type=int, default=30)
     p.add_argument("--executor", default="infsh", choices=["heuristic", "infsh"])
     p.add_argument("--executor-app", default="openrouter/qwen3-8b")
@@ -262,8 +329,8 @@ def main():
     if args.mode == "closed_loop" and not args.curator_checkpoint:
         p.error("--curator-checkpoint is required in closed_loop mode")
 
-    # Build executor + env. Executor settings mirror training (reasoning_effort
-    # medium, max_tokens 8192) so we don't reintroduce a train/eval mismatch.
+    # Executor settings mirror training (reasoning_effort medium, max_tokens
+    # 8192) so we don't reintroduce a train/eval mismatch.
     exec_cfg = {"type": args.executor}
     if args.executor == "infsh":
         exec_cfg.update({
@@ -280,7 +347,8 @@ def main():
     executor = create_executor(exec_cfg)
 
     from skillos.envs.config import make_alfworld_env, SPLIT_MAP
-    env = make_alfworld_env(SPLIT_MAP[args.split], batch_size=1)
+    bs = max(1, min(args.batch_size, args.num_games))
+    env = make_alfworld_env(SPLIT_MAP[args.split], batch_size=bs)
 
     from skillos.skills.repo import SkillRepo
     repo = SkillRepo()  # always starts empty — paper protocol
@@ -297,58 +365,76 @@ def main():
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[eval] mode={args.mode}  split={args.split}  num_games={args.num_games}", flush=True)
+    print(f"[eval] mode={args.mode}  split={args.split}  num_games={args.num_games}  "
+          f"batch_size={bs}", flush=True)
     print(f"[eval] curator={args.curator_checkpoint or '<none>'}", flush=True)
     print(f"[eval] executor={args.executor}/{args.executor_app}", flush=True)
     print(f"[eval] out={out_path}", flush=True)
 
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=bs, thread_name_prefix="eval-wave")
     records: list[dict] = []
     wall_start = time.time()
+    games_done = 0
+    wave_idx = 0
     with open(out_path, "w") as fh:
-        for i in range(args.num_games):
-            t0 = time.time()
-            try:
-                result = run_executor_episode_with_trace(env, executor, repo, args.max_steps)
-            except Exception as e:
-                print(f"  game {i}: executor episode FAILED — {type(e).__name__}: {e}",
-                      file=sys.stderr, flush=True)
-                continue
-            ep_seconds = time.time() - t0
+        while games_done < args.num_games:
+            wave_idx += 1
+            wave_repo_size_before = len(repo)
+            t_exec = time.time()
+            wave_results = run_executor_wave_with_trace(
+                env, [executor], repo, args.max_steps, pool)
+            executor_wave_seconds = time.time() - t_exec
 
-            curation_meta: dict = {}
-            if args.mode == "closed_loop":
-                tc = time.time()
-                try:
-                    curation_meta = curator.curate(repo, result)
-                except Exception as e:
-                    print(f"  game {i}: CURATOR error — {type(e).__name__}: {e}",
-                          file=sys.stderr, flush=True)
-                    curation_meta = {"error": f"{type(e).__name__}: {e}"}
-                curation_meta["curate_seconds"] = time.time() - tc
+            curator_wave_seconds = 0.0
+            for slot, result in enumerate(wave_results):
+                if games_done >= args.num_games:
+                    break
 
-            rec = {
-                "game_idx": i,
-                "gamefile": result["gamefile"],
-                "task_type": result["task_type"],
-                "task": result["task"],
-                "success": bool(result["success"]),
-                "steps": result["steps"],
-                "n_retrieved_at_eval": result["n_retrieved"],
-                "episode_seconds": round(ep_seconds, 2),
-                "repo_size_at_episode_start": curation_meta.get("repo_size_before",
-                                                                  len(repo) - curation_meta.get("ops_executed", 0)),
-                **{f"curator/{k}": v for k, v in curation_meta.items()},
-            }
-            records.append(rec)
-            fh.write(json.dumps(rec) + "\n")
-            fh.flush()
+                curation_meta: dict = {}
+                if args.mode == "closed_loop":
+                    tc = time.time()
+                    try:
+                        curation_meta = curator.curate(repo, result)
+                    except Exception as e:
+                        import traceback
+                        msg = f"{type(e).__name__}: {e!r}"
+                        print(f"  game {games_done}: CURATOR error — {msg}",
+                              file=sys.stderr, flush=True)
+                        traceback.print_exc(file=sys.stderr)
+                        sys.stderr.flush()
+                        curation_meta = {"error": msg}
+                    curation_meta["curate_seconds"] = round(time.time() - tc, 2)
+                    curator_wave_seconds += curation_meta["curate_seconds"]
 
-            n_ok = sum(1 for r in records if r["success"])
-            running_sr = n_ok / len(records)
-            print(f"  [{i + 1:3d}/{args.num_games}] {result['task_type']:6s}  "
-                  f"{'✓' if result['success'] else '✗'}  steps={result['steps']:2d}  "
-                  f"repo={len(repo):3d}  ep={ep_seconds:5.0f}s  "
-                  f"SR_so_far={n_ok}/{len(records)}={running_sr:.1%}", flush=True)
+                rec = {
+                    "game_idx": games_done,
+                    "wave_idx": wave_idx,
+                    "wave_slot": slot,
+                    "gamefile": result["gamefile"],
+                    "task_type": result["task_type"],
+                    "task": result["task"],
+                    "success": bool(result["success"]),
+                    "steps": result["steps"],
+                    "n_retrieved_at_eval": result["n_retrieved"],
+                    "executor_wave_seconds": round(executor_wave_seconds, 2),
+                    "repo_size_at_episode_start": wave_repo_size_before,
+                    **{f"curator/{k}": v for k, v in curation_meta.items()},
+                }
+                records.append(rec)
+                fh.write(json.dumps(rec) + "\n")
+                fh.flush()
+                games_done += 1
+
+                n_ok = sum(1 for r in records if r["success"])
+                running_sr = n_ok / len(records)
+                print(f"  [{games_done:3d}/{args.num_games}] w{wave_idx:02d}.{slot:02d} "
+                      f"{result['task_type']:6s}  "
+                      f"{'OK' if result['success'] else 'XX'}  steps={result['steps']:2d}  "
+                      f"repo={len(repo):3d}  "
+                      f"SR_so_far={n_ok}/{len(records)}={running_sr:.1%}", flush=True)
+            print(f"  --- wave {wave_idx} done: exec={executor_wave_seconds:.0f}s  "
+                  f"curator={curator_wave_seconds:.0f}s  repo_now={len(repo)} ---", flush=True)
+    pool.shutdown(wait=False)
 
     wall = time.time() - wall_start
     n = len(records)
@@ -361,9 +447,10 @@ def main():
         by_type[r["task_type"]][1] += 1
 
     print(f"\n=== {args.mode}  ckpt={args.curator_checkpoint or '<none>'}  "
-          f"split={args.split} ===")
+          f"split={args.split}  bs={bs} ===")
     print(f"  TOTAL: {n_ok}/{n} = {overall:.1%}  "
-          f"({wall:.0f}s total, {wall / max(n, 1):.0f}s/game avg)")
+          f"({wall:.0f}s total, {wall / max(n, 1):.0f}s/game avg, "
+          f"{wave_idx} waves)")
     for t in sorted(by_type):
         s, total = by_type[t]
         print(f"  {t:6s}: {s}/{total} = {s / max(total, 1):.1%}")
