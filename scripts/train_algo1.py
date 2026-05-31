@@ -12,10 +12,28 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 
 import torch
+import torch.distributed as dist
+
+# Initialize the default NCCL process group with a 4-hour collective
+# timeout BEFORE accelerate's own init runs. accelerate's state.py checks
+# `dist.is_initialized()` and skips init if we got there first, so our
+# timeout sticks. The default 30-min timeout trips during Algorithm 1's
+# G=10 tool-loop iterations because each iteration's tool execution can
+# take 10-15 min, and per-iteration rank skew accumulates across the
+# G+1=11 iterations into >30-min waits at the post-_generate gather.
+if int(os.environ.get("WORLD_SIZE", "1")) > 1 and not dist.is_initialized():
+    dist.init_process_group(
+        backend="nccl",
+        timeout=datetime.timedelta(
+            seconds=int(os.environ.get("SKILLOS_NCCL_TIMEOUT_S", "14400"))
+        ),
+    )
+
 import yaml
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer

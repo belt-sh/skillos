@@ -203,14 +203,38 @@ class Algo1CuratorEnv:
                 f"played. final repo size = {len(self._repo)} skills."
             )
 
-        # 3) Run executor at the next position. Wrap the blocking
-        # _run_executor_at in asyncio.to_thread so this coroutine yields
-        # while infsh I/O is pending. TRL's gather interleaves all 16
-        # rollouts on a rank concurrently; without the await, async def is
-        # a no-op for parallelism. ~16× speedup per rank vs sync sequential.
+        # 3) Run executor at the next position. Two reasons for the
+        # asyncio wrapping:
+        #   (a) `asyncio.to_thread` makes this coroutine yield during the
+        #       blocking infsh I/O so TRL's gather can interleave all 16
+        #       rollouts on a rank concurrently.
+        #   (b) `asyncio.wait_for(..., timeout=_executor_timeout_s)` caps
+        #       per-rollout episode wall so a single slow game can't make
+        #       this rank lag far enough behind peers to trip the 30-min
+        #       NCCL collective watchdog at the post-_generate gather. On
+        #       timeout we return a sentinel trajectory and proceed —
+        #       cumulative inter-rank skew stays bounded across the G
+        #       positions of the rollout.
         import asyncio
         position = self._position
-        result = await asyncio.to_thread(self._run_executor_at, position)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self._run_executor_at, position),
+                timeout=_executor_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            print(f"[algo1] executor timeout at slot={self._slot} group="
+                  f"{self._group_id} position={position} (budget="
+                  f"{_executor_timeout_s:.0f}s) — using sentinel trajectory",
+                  file=sys.stderr, flush=True)
+            result = {
+                "task_description": f"<timeout-position-{position}>",
+                "trajectory": [],
+                "success": False,
+                "steps": 0,
+                "gamefile": "",
+                "skills_text": "",
+            }
         self._executor_results.append(result)
         self._position += 1
 

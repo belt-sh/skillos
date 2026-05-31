@@ -30,9 +30,25 @@ fi
 # parallel across rollouts via TRL's tool loop iteration phase). Per-step:
 # 32 instances × 8 generations × 10 positions = 2560 executor calls. infsh is
 # elastic so widen the pool; the slow part is the concurrent infsh act()s.
-export SKILLOS_PARALLEL_ROLLOUTS=64
+export SKILLOS_PARALLEL_ROLLOUTS=256          # tolerate stuck envs from
+                                              # asyncio.wait_for timeouts
+                                              # (threads can't be cancelled
+                                              # so the alfworld env borrow
+                                              # leaks for the timed-out
+                                              # episode's lifetime).
 export SKILLOS_PARALLEL_JUDGES=24
-export SKILLOS_EXECUTOR_MAX_STEPS=30
+export SKILLOS_EXECUTOR_MAX_STEPS=25          # paper avg 18.9 steps; 25 covers
+                                              # typical cases and reduces the
+                                              # tail-rollout variance that
+                                              # otherwise causes per-iteration
+                                              # rank skew at vLLM colocate
+                                              # weight-sync collectives.
+export SKILLOS_EXECUTOR_TIMEOUT_S=900          # 15 min cap per executor
+                                              # episode. asyncio.wait_for in
+                                              # env.py uses this — keeps each
+                                              # tool-loop iteration's wall
+                                              # under the 30-min NCCL
+                                              # collective watchdog.
 # Per-position phase wall budget. With 10 positions per rollout the cumulative
 # wall can dwarf Path B's single-rollout phase; keep this < the 1800s NCCL
 # collective watchdog so a stalled position doesn't kill the run.
