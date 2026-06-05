@@ -26,11 +26,12 @@ batch_size: 2                     # per device
 gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
 learning_rate: 1.0e-6             # paper exact
 num_generations: 8                # paper GRPO group size N=8
-max_completion_length: 8192       # paper Max Response Length = 4096, but
-                                  # accumulates across G=10 tool-loop
-                                  # iterations; bumped for headroom so a
-                                  # single long completion at position k
-                                  # doesn't make the loop exit early.
+max_completion_length: 4096       # paper Max Response Length. The 8192
+                                  # bump caused OOM during backward at G=10
+                                  # because the cumulative tool-history +
+                                  # completion tokens balloon activations.
+                                  # Back to paper value; loop may exit
+                                  # early on overlong positions, accept it.
 temperature: 1.0                  # paper rollout temperature
 beta: 0.0
 
