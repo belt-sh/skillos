@@ -1,0 +1,74 @@
+# SkillOS ALFWorld training — 8x H100, FULL fine-tuning, PAPER ALGORITHM 1
+# v6: KL ANCHOR ON (beta=0.001, paper Table 4 value).
+#
+# Sole intentional diff vs v5 (configs/alfworld_8xh100_algo1.yaml): beta=0.001.
+# Every other hyperparam is byte-identical so this isolates the KL-term effect.
+#
+# Why: v5 ran beta=0.0 with the rationale "paper's 0.001 is listed-but-discarded
+# in methods text + observed KL ~0.01 makes 0.001 coef ~1e-5 of loss = no-op."
+# After the v5 held-out eval landed (ckpt20 collapsed to 22.1% = -11.5pp vs
+# 33.6% no_memory baseline, U-shape across 10/20/30/40/50/60), that rationale
+# no longer holds: the U-shape trough is exactly what a missing KL anchor
+# predicts — a single bad batch yanks the policy out of distribution and it
+# takes 20-30 steps to drift back. The literal-Table-4 read is beta=0.001;
+# v6 takes that literal read.
+#
+# Launch via ./run_algo1_v6_kl.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-algo1-v6-kl
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4)
+num_episodes: 3553                # paper training split
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6             # paper exact
+num_generations: 8                # paper GRPO group size N=8
+max_completion_length: 4096       # paper Max Response Length (see v5 config for
+                                  # why we don't bump to 8192).
+temperature: 1.0                  # paper rollout temperature
+beta: 0.001                       # paper Table 4 KL coefficient (sole diff vs v5)
+
+# Algorithm 1 specifics.
+group_size: 10                    # paper |G|=10 (Data Grouping Size)
+algo1_use_mega_tool: true         # single curate_and_advance(operations)
+# max_tool_calling_iterations is set by the trainer to group_size.
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4
+
+use_lora: false
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B). Same as v5; not the
+# paper's local-vLLM executor but the user constraint stands (all 8 GPUs to
+# training).
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper).
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-algo1-v6-kl
