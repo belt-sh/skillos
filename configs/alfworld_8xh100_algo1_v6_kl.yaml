@@ -37,7 +37,12 @@ algo1_use_mega_tool: true         # single curate_and_advance(operations)
 
 use_vllm: true
 vllm_mode: colocate
-vllm_gpu_memory_utilization: 0.4
+# v6 needs to leave 16 GB more on the training side for the bf16 reference
+# model that TRL materializes when beta>0 (v5 had beta=0, so no ref). Dropping
+# 0.4 → 0.3 returns 8 GB to training per rank; vLLM still has ~8 GB for KV
+# cache after the ~16 GB shared-policy-weights accounting, which is well above
+# the ~4 GB worst case for Qwen3-8B @ 4096 ctx × num_generations=8 × bs=2.
+vllm_gpu_memory_utilization: 0.3
 
 use_lora: false
 enable_thinking: false
