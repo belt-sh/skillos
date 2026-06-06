@@ -36,6 +36,7 @@ if int(os.environ.get("WORLD_SIZE", "1")) > 1 and not dist.is_initialized():
 
 import yaml
 from datasets import Dataset
+from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
 from skillos.algo1 import Algo1CuratorEnv, configure as configure_algo1
@@ -155,11 +156,21 @@ def train(config: dict) -> None:
     dataset = build_dataset(num_episodes)
     args = GRPOConfig(**grpo_kwargs)
 
+    peft_config = None
+    if config.get("use_lora", False):
+        peft_config = LoraConfig(
+            r=config.get("lora_r", 32),
+            lora_alpha=config.get("lora_alpha", 64),
+            target_modules="all-linear",
+            task_type="CAUSAL_LM",
+        )
+
     trainer = GRPOTrainer(
         model=model_name,
         reward_funcs=reward_func,
         train_dataset=dataset,
         args=args,
+        peft_config=peft_config,
         environment_factory=Algo1CuratorEnv,
     )
 

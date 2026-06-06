@@ -1,0 +1,86 @@
+# SkillOS ALFWorld training — 8x H100, PAPER ALGORITHM 1, LoRA + KL ANCHOR.
+# v7: LoRA r=32 + paper Table 4 beta=0.001.
+#
+# Why a LoRA branch:
+#   - v6 (FFT + beta=0.001) OOM'd: TRL materializes a 16 GB bf16 reference-model
+#     copy on each rank when beta>0 under ZeRO-2 (ZeRO-2 doesn't shard the ref).
+#     Dropping vllm_gpu_util 0.4→0.3 left step-1 at 99.8% peak; step-2 hit the
+#     cliff. Pushing 0.2 would have bought margin; LoRA removes the cliff.
+#   - Under LoRA, TRL uses the frozen base as the implicit reference (toggling
+#     the adapter on/off for policy vs ref forward) — NO separate ref copy.
+#     Static memory per rank drops from ~76 GB (FFT+KL) to ~32 GB.
+#   - LoRA also runs ~4-6× faster per step (smaller backward); 60 steps fits
+#     in ~24h vs FFT's ~110h. We can sweep hypotheses (beta, lr) in days, not
+#     weeks.
+#
+# Sanctioned-deviation budget (per feedback_paper_parity): LoRA is the ONE
+# deviation, compensated by lr × 10 (paper 1e-6 for FFT → 1e-5 for LoRA), no
+# extra steps. Every other paper-named hyperparam is held exact, including
+# beta=0.001 (the v6 hypothesis we still want to test).
+#
+# Diffs vs v6 FFT (configs/alfworld_8xh100_algo1_v6_kl.yaml):
+#   - use_lora: false → true; lora_r: 32; lora_alpha: 64
+#   - learning_rate: 1.0e-6 → 1.0e-5 (paper × 10, LoRA compensation)
+#   - output_dir + wandb_run_name renamed
+#   - vllm_gpu_memory_utilization: 0.3 → 0.4 (no ref-model squeeze, restored to v5 value)
+# Everything else byte-identical.
+#
+# Launch via ./run_algo1_v7_lora_kl.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-algo1-v7-lora-kl
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4)
+num_episodes: 3553                # paper training split
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-5             # paper 1e-6 × 10 (LoRA compensation, sanctioned)
+num_generations: 8                # paper GRPO group size N=8
+max_completion_length: 4096       # paper Max Response Length
+temperature: 1.0                  # paper rollout temperature
+beta: 0.001                       # paper Table 4 KL coefficient
+
+# Algorithm 1 specifics.
+group_size: 10                    # paper |G|=10 (Data Grouping Size)
+algo1_use_mega_tool: true         # single curate_and_advance(operations)
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4  # restored to v5 value; no separate ref model
+                                  # under LoRA so training side fits easily.
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B). Same as v5/v6.
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper).
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-algo1-v7-lora-kl
