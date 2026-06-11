@@ -1,20 +1,24 @@
 # SkillOS Algorithm 1 — SMOKE config. One opt step, heuristic executor/judge,
-# tiny G, tiny GRPO group. Verifies TRL tool discovery + tool-call loop + the
-# new mega-tool schema end to end on a single GPU. Not a real training run.
+# tiny G, tiny GRPO group. Verifies TRL tool discovery + tool-call loop +
+# dataset-driven group identity + the v8 LoRA/KL/loss path end to end.
+# Run at --num_processes 8 (same topology as prod; single-rank ZeRO-2 OOMs
+# at optimizer init). Not a real training run.
 
 model: Qwen/Qwen3-8B
 output_dir: ./output/algo1-smoke
 
 epochs: 1
 max_steps: 1
-num_episodes: 16
+num_episodes: 16                # → 8 groups of |G|=2: exactly one step's worth
 batch_size: 1
 gradient_accumulation_steps: 2  # matches configs/accelerate_zero2.yaml
-learning_rate: 1.0e-6
+learning_rate: 1.0e-5
 num_generations: 2
 max_completion_length: 1024
 temperature: 1.0
-beta: 0.0
+beta: 0.001                     # exercise the LoRA implicit-ref KL path
+loss_type: grpo
+lr_scheduler_type: constant
 
 group_size: 2
 
@@ -22,7 +26,9 @@ use_vllm: true
 vllm_mode: colocate
 vllm_gpu_memory_utilization: 0.4
 
-use_lora: false
+use_lora: true
+lora_r: 32
+lora_alpha: 64
 enable_thinking: false
 
 executor:

@@ -1,0 +1,78 @@
+# SkillOS ALFWorld training — 8x H100, PAPER ALGORITHM 1, LoRA + KL ANCHOR.
+# v8: v7 + the group-collapse postmortem fixes
+# (docs/postmortem-2026-06-10-algo1-group-collapse.md).
+#
+# What v8 fixes vs v7 (code-side, this config mostly inherits):
+#   - Group identity from dataset columns (group_id/task_type per row), not
+#     env-slot arithmetic — v5/v6/v7 trained on ONE cached "pick" sequence
+#     per rank with cross-rank divergence inside GRPO groups.
+#   - Stable task-sequence seeding (md5, + PYTHONHASHSEED pinned in launcher).
+#   - Judge actually wired: r_cnt is live for the first time in Algorithm 1.
+#   - loss_type: grpo (TRL 1.4.0 silently defaulted to dapo).
+#   - lr_scheduler_type: constant (HF silently defaulted to linear decay).
+#   - r_task=0 for early-quit rollouts; r_comp input tokens accumulated.
+#
+# Sanctioned-deviation budget (per feedback_paper_parity): LoRA is the ONE
+# deviation, compensated by lr × 10 (paper 1e-6 for FFT → 1e-5 for LoRA), no
+# extra steps. Every other paper-named hyperparam is held exact.
+#
+# Launch via ./run_algo1_v8_lora_kl.sh.
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-algo1-v8-lora-kl
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4)
+num_episodes: 3553                # paper training split (→ 355 groups of |G|=10)
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-5             # paper 1e-6 × 10 (LoRA compensation, sanctioned)
+num_generations: 8                # paper GRPO group size N=8
+max_completion_length: 4096       # paper Max Response Length
+temperature: 1.0                  # paper rollout temperature
+beta: 0.001                       # paper Table 4 KL coefficient
+loss_type: grpo                   # paper GRPO loss (TRL default is dapo)
+lr_scheduler_type: constant       # paper lr held constant (HF default is linear decay)
+
+# Algorithm 1 specifics.
+group_size: 10                    # paper |G|=10 (Data Grouping Size)
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.4
+
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B). Same as v5/v6/v7.
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper). Live for
+# the first time in Algorithm 1 as of v8.
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 10
+save_total_limit: 6
+
+wandb_run_name: alfworld-8xh100-algo1-v8-lora-kl

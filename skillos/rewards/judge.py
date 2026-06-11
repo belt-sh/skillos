@@ -213,17 +213,25 @@ class InfshJudge(Judge):
 
 
 def _parse_judge_score(response: str) -> float:
-    """Parse judge response JSON to get binary VALID score."""
+    """Parse judge response JSON to get binary VALID score.
+
+    Raises ValueError when no VALID verdict can be parsed. Parse failure must
+    NOT be conflated with a genuine VALID=false: a returned 0.0 gets memoized
+    by the sha256 judge cache forever, so one truncated/malformed response
+    would permanently zero that content's score. Raising instead makes the
+    judge future fail, which the env catches and drops (score excluded, not
+    cached).
+    """
+    json_match = re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL)
+    if not json_match:
+        json_match = re.search(r"(\{[^}]*\"VALID\"[^}]*\})", response, re.DOTALL)
+    if not json_match:
+        raise ValueError(f"judge response has no VALID JSON: {response[:200]!r}")
     try:
-        json_match = re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL)
-        if not json_match:
-            json_match = re.search(r"(\{[^}]*\"VALID\"[^}]*\})", response, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(1))
-            return 1.0 if result.get("VALID", False) else 0.0
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return 0.0
+        result = json.loads(json_match.group(1))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"judge response JSON unparseable: {response[:200]!r}") from e
+    return 1.0 if result.get("VALID", False) else 0.0
 
 
 def create_judge(config: dict) -> Judge:

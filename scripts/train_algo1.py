@@ -51,19 +51,34 @@ def _has_vllm() -> bool:
         return False
 
 
-def build_dataset(num_episodes: int) -> Dataset:
-    """One row per training instance. The instance's group_id is implicit in
-    the env's slot ordering (slot // num_generations); TRL feeds rows through
-    sequentially so as long as we have enough rows the env's group-sequence
-    cache stays correct."""
+ALFWORLD_TASK_TYPES = ["pick", "clean", "heat", "cool", "look", "pick2"]
+
+
+def build_dataset(num_episodes: int, group_size: int) -> Dataset:
+    """One row per GRPO *group* (paper: 3553 episodes / |G|=10 ≈ 355 groups),
+    carrying explicit `group_id`/`task_type` columns. TRL repeats each row
+    num_generations times and passes the row to `env.reset(**row)`, so all N
+    generations of a group share the same task sequence regardless of how
+    completions are sharded across ranks — group identity comes from the
+    data, never from env-slot arithmetic (which collapses because TRL reuses
+    env instances; see docs/postmortem-2026-06-10-algo1-group-collapse.md).
+
+    Task types round-robin over the six ALFWorld types so training covers
+    all of them (uniform by group, not split-proportional — an interpretive
+    choice; the paper groups "related" tasks without specifying frequencies).
+    """
     from skillos.curator.prompts import CURATOR_SYSTEM
+    num_groups = max(1, num_episodes // group_size)
     return Dataset.from_dict({
         "prompt": [
             [
                 {"role": "system", "content": CURATOR_SYSTEM},
                 {"role": "user", "content": ""},
             ]
-        ] * num_episodes,
+        ] * num_groups,
+        "group_id": list(range(num_groups)),
+        "task_type": [ALFWORLD_TASK_TYPES[i % len(ALFWORLD_TASK_TYPES)]
+                      for i in range(num_groups)],
     })
 
 
@@ -83,7 +98,7 @@ def train(config: dict) -> None:
     use_vllm = config.get("use_vllm", True) and has_cuda and has_vllm
 
     # Configure classic env primitives (executor pool, ALFWorld env factory,
-    # judge stub). algo1's env reuses _run_probe and the seed index from this
+    # judge). algo1's env reuses _run_probe and the seed index from this
     # module.
     configure_classic_env(
         executor_config=config.get("executor", {"type": "heuristic"}),
@@ -92,10 +107,13 @@ def train(config: dict) -> None:
         num_probe_tasks=0,   # Algorithm 1 doesn't use Path B probes
     )
 
-    # Algorithm 1 hyperparams.
+    # Algorithm 1 hyperparams. judge_submit must be wired explicitly —
+    # passing None silently zeroes the paper's λ_u·r_cnt reward term
+    # (postmortem 2026-06-10, bug 3).
+    from skillos.envs import curator_env as classic_env
     configure_algo1(
         executor=None,
-        judge_submit=None,   # judge wiring is currently via classic._submit_judge
+        judge_submit=classic_env._submit_judge,
         num_generations=num_generations,
         group_size=group_size,
     )
@@ -118,6 +136,11 @@ def train(config: dict) -> None:
         max_completion_length=config.get("max_completion_length", 4096),
         temperature=config.get("temperature", 1.0),
         beta=config.get("beta", 0.0),
+        # TRL 1.4.0 defaults loss_type="dapo" and HF defaults a linear-decay
+        # LR schedule — both undeclared deviations from the paper's GRPO setup
+        # (postmortem 2026-06-10, bug 4). Pin paper-faithful defaults.
+        loss_type=config.get("loss_type", "grpo"),
+        lr_scheduler_type=config.get("lr_scheduler_type", "constant"),
         # Tool loop iterations: G+1 because the first generation is a
         # priming "empty ops" call (curator hasn't seen any trajectory yet
         # — reset returns only the session-start instructional prompt),
@@ -153,7 +176,7 @@ def train(config: dict) -> None:
     if config.get("max_steps"):
         grpo_kwargs["max_steps"] = config["max_steps"]
 
-    dataset = build_dataset(num_episodes)
+    dataset = build_dataset(num_episodes, group_size)
     args = GRPOConfig(**grpo_kwargs)
 
     peft_config = None

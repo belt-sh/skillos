@@ -15,8 +15,17 @@ the same G task seeds so all N slots in a GRPO group walk an identical
 
 from __future__ import annotations
 
+import hashlib
 import random
 from typing import List
+
+
+def _stable_hash(s: str) -> int:
+    # NOT builtin hash(): Python salts str hashes per process, so each of the
+    # 8 accelerate ranks would derive a different RNG seed and group members
+    # sharded across ranks would walk different task sequences (postmortem
+    # 2026-06-10, bug 2).
+    return int.from_bytes(hashlib.md5(s.encode("utf-8")).digest()[:8], "big")
 
 
 def sample_group_seeds(
@@ -26,7 +35,7 @@ def sample_group_seeds(
     seed_index,
 ) -> List[int]:
     """Return G seeds of the requested task_type, deterministic per group_id."""
-    rng = random.Random(group_id * 1_000_003 + hash(task_type))
+    rng = random.Random(group_id * 1_000_003 + _stable_hash(task_type))
     pool = list(seed_index.seeds_for_type(task_type))
     if not pool:
         raise ValueError(f"no seeds for task_type={task_type!r}")

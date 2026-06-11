@@ -106,19 +106,23 @@ class Algo1CuratorEnv:
         self._judge_futures: list[concurrent.futures.Future] = []
         self._input_tokens: int = 0
 
-        # Per-rollout group-shared task sequence (populated on first reset).
+        # Per-rollout group-shared task sequence (populated on each reset from
+        # the dataset row's group_id/task_type columns).
         self._task_seeds: list[int] = []
         self._task_descriptions: list[str] = []
         self._group_type: str = "pick"
+        # Group identity MUST come from the dataset row (set in reset). TRL
+        # creates env instances once and reuses them, so slot arithmetic
+        # (slot // num_generations) degenerates to a constant — see
+        # docs/postmortem-2026-06-10-algo1-group-collapse.md, bug 1.
+        # NB: plain attribute, NOT a raising property — TRL's tool discovery
+        # walks inspect.getmembers(env), which evaluates properties pre-reset.
+        self._group_id: int | None = None
 
         self.reward = 0.0
         self.done = False
 
     # ---- TRL hooks ----------------------------------------------------
-
-    @property
-    def _group_id(self) -> int:
-        return self._slot // _num_generations
 
     def reset(self, **kwargs: Any) -> str:
         """Initialize a new rollout. Returns an instructional prompt for the
@@ -140,6 +144,19 @@ class Algo1CuratorEnv:
         self._judge_futures = []
         self.reward = 0.0
         self.done = False
+
+        group_id = kwargs.get("group_id")
+        task_type = kwargs.get("task_type")
+        if group_id is None or task_type is None:
+            raise RuntimeError(
+                "Algo1CuratorEnv.reset requires 'group_id' and 'task_type' "
+                "dataset columns (build_dataset in scripts/train_algo1.py). "
+                "TRL passes the full dataset row as reset kwargs; without "
+                "these, group identity silently collapses — see "
+                "docs/postmortem-2026-06-10-algo1-group-collapse.md."
+            )
+        self._group_id = int(group_id)
+        self._group_type = str(task_type)
 
         # Sample the group's task sequence (shared across N slots in group).
         self._ensure_group_sequence()
@@ -238,12 +255,17 @@ class Algo1CuratorEnv:
         self._executor_results.append(result)
         self._position += 1
 
-        return _build_curator_input(
+        curator_input = _build_curator_input(
             task_description=result["task_description"],
             past_skills=result.get("skills_text", ""),
             trajectory_text=_format_trajectory(result),
             success=bool(result.get("success")),
         )
+        # Accumulate |χ| across positions so r_comp = 1 - |S|/|χ| compares the
+        # repo against the full rollout input, not just the ~50-word session
+        # prompt (which made r_comp reward near-empty repos).
+        self._input_tokens += len(curator_input.split())
+        return curator_input
 
     # ---- Op application -----------------------------------------------
 
@@ -311,19 +333,21 @@ class Algo1CuratorEnv:
                 return _classic._type_seeds.get(t) or _classic._type_seeds.get("pick") or []
 
         gid = self._group_id
+        ttype = self._group_type
         with _batch_lock:
             if gid in _group_sequences:
                 self._task_seeds = list(_group_sequences[gid])
-                self._group_type = _group_types[gid]
             else:
-                ttype = _group_types.get(gid, "pick")
                 self._task_seeds = sample_group_seeds(
                     group_id=gid, task_type=ttype, group_size=_group_size,
                     seed_index=_SeedIndexAdapter())
-                self._group_type = ttype
                 _group_sequences[gid] = list(self._task_seeds)
                 _group_types[gid] = ttype
         self._task_descriptions = [""] * _group_size
+        # Per-rollout task observability (postmortem guardrail): a degenerate
+        # task distribution must be visible in the first step's log.
+        print(f"[algo1] rollout slot={self._slot} gid={gid} type={ttype} "
+              f"seeds={self._task_seeds}", flush=True)
 
     # ---- Executor invocation ------------------------------------------
 
@@ -360,9 +384,12 @@ class Algo1CuratorEnv:
         )
 
         # r_task — mean over positions 2..|G| (1-indexed in the paper). We
-        # use 1..G-1 here (0-indexed). For G=1 this is degenerate; assert.
+        # use 1..G-1 here (0-indexed). Position 0 ran on empty S, so a rollout
+        # that quit before any informed position earns NO task reward — falling
+        # back to position 0's success would pay the curator for the
+        # executor's empty-repo baseline.
         if len(self._executor_results) <= 1:
-            r_task = float(self._executor_results[0].get("success", 0.0)) if self._executor_results else 0.0
+            r_task = 0.0
         else:
             tail = self._executor_results[1:]
             successes = [float(r.get("success", 0.0)) for r in tail]

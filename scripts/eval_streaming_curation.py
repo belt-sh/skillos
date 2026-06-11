@@ -241,13 +241,17 @@ class CuratorInference:
         # With `tools=`, apply_chat_template returns a BatchEncoding (dict-like)
         # whose __getattr__ raises empty AttributeError on .shape — passing it
         # straight to generate() fails. Pull input_ids + attention_mask out.
+        # `enable_thinking` must be a direct kwarg: apply_chat_template has no
+        # `chat_template_kwargs` parameter, so the dict form was silently
+        # ignored and the curator ran in thinking mode despite being trained
+        # with thinking disabled (postmortem 2026-06-10, eval findings).
         enc = self.tok.apply_chat_template(
             messages,
             tools=TOOLS_SCHEMA,
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
-            chat_template_kwargs={"enable_thinking": self.enable_thinking},
+            enable_thinking=self.enable_thinking,
         )
         input_ids = enc["input_ids"].to(self.model.device)
         attn_mask = enc.get("attention_mask")
@@ -324,10 +328,15 @@ def main():
                    help="Device for the curator model (e.g. cuda, cuda:0).")
     p.add_argument("--out", required=True,
                    help="Per-game JSONL output. Compare arms by joining on `gamefile`.")
+    p.add_argument("--overwrite", action="store_true",
+                   help="Allow clobbering an existing --out file.")
     args = p.parse_args()
 
     if args.mode == "closed_loop" and not args.curator_checkpoint:
         p.error("--curator-checkpoint is required in closed_loop mode")
+    if Path(args.out).exists() and not args.overwrite:
+        p.error(f"{args.out} already exists — a crashed/finished arm would be "
+                "silently truncated. Pass --overwrite to clobber.")
 
     # Executor settings mirror training (reasoning_effort medium, max_tokens
     # 8192) so we don't reintroduce a train/eval mismatch.
