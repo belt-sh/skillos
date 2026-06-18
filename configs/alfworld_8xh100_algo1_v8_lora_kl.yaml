@@ -72,7 +72,12 @@ logging_steps: 1
 report_to: wandb
 
 save_strategy: steps
-save_steps: 10
-save_total_limit: 6
+save_steps: 1                     # LoRA adapter ~167MB + tiny optim state →
+                                  # save every step is cheap (~seconds vs ~2.5h
+                                  # step). Caps crash-loss to ≤1 step: a
+                                  # checkpoint can only be written at a step
+                                  # boundary, so this is the best "save before
+                                  # an infsh crash" guarantee possible.
+save_total_limit: 40             # keep all evaluated ckpts (10-50) + 51-60
 
 wandb_run_name: alfworld-8xh100-algo1-v8-lora-kl
