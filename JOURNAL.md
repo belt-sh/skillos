@@ -15,6 +15,74 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Current status (2026-06-21)
+
+- **Run:** `algo1v8lorakl` (wandb `okaris/skillos`), config
+  `configs/alfworld_8xh100_algo1_v8_lora_kl.yaml`, launcher
+  `run_algo1_v8_lora_kl.sh`. This is the **first faithful Algorithm 1 run** —
+  grouped |G|=10 task streams, single `curate_and_advance` mega-tool, judge
+  wired, `loss_type=grpo`, after the group-collapse postmortem
+  (`docs/postmortem-2026-06-10-algo1-group-collapse.md`).
+- **Setup:** 8×H100, **LoRA r=32 + KL anchor (beta=0.001)**, vLLM colocate;
+  frozen Qwen3-8B executor + Qwen3-32B judge on inference.sh. LoRA is the one
+  sanctioned deviation (lr scaled 10× to 1e-5).
+- **Training: COMPLETE.** Hit the full **60-step paper schedule** on 2026-06-19.
+  Resumed cleanly from checkpoint-50 → 60, exit 0, no NCCL abort. The new
+  **per-rollout synchronized deadline** (`SKILLOS_PHASE_BUDGET_S`, enforced in
+  `Algo1CuratorEnv.curate_and_advance`) fired **1612 DEADLINE CUTs** and the run
+  survived — vs v8's earlier SIGABRT at steps 59/54 from rank skew (slow
+  composite-verb groups maxing the 900s episode cap drifted one rank 4h behind
+  the NCCL collective). Cut positions are masked from `r_task` (cut=True,
+  success=None), so the curation-quality terms keep their honest gradient.
+
+- **Held-out eval (paired-by-gamefile McNemar vs `no_memory`, n=140):**
+
+  | checkpoint | SR | Δ vs baseline | p |
+  |---|---|---|---|
+  | no_memory | 33.6% | — | — |
+  | ckpt10 | 29.3% | −4.3 | 0.26 |
+  | ckpt20 | 35.7% | +2.1 | 0.71 |
+  | **ckpt30** | **42.9%** | **+9.3** | **0.035** |
+  | ckpt40 | 30.7% | −2.9 | 0.57 |
+  | ckpt50 | 37.9% | +4.3 | 0.31 |
+  | ckpt60 | 35.0% | +1.4 | 0.86 |
+
+  **ckpt30 is the peak and the only significant arm (+9.3pp, p=0.035).** The
+  trajectory is bimodal/noisy (peaks at 10 & 30, troughs between), not the
+  paper's monotone-to-60 — almost certainly the small effective batch + the
+  TRL/GRPO-vs-verl/FSDP framework swap, not a method failure. We recovered ~70%
+  of the paper's lift; we did NOT reproduce their monotone-improvement-to-endpoint.
+
+### Open thread: the baseline is 14pp below the paper (33.6% vs 47.9%)
+
+Same model, same 30-step cap, yet our `no_memory` baseline trails the paper's.
+Worked the `paper-repro-decode-settings-audit` hypothesis tree:
+
+- **Decode ruled out.** `scripts/debug_executor_audit.py`: `<action>` parses
+  cleanly at temp 0.4/0.6, reasoning is ON (~1.5k chars, the 8192 budget is not
+  truncating). Not a sampler problem.
+- **Failure shape:** 100% of baseline failures hit the step cap exactly (the
+  executor wanders, never completes), concentrated in composite verbs
+  (Clean/Cool/Heat/Pick2 ~19–25% vs Pick 60%).
+- **Structural cause found (real).** Traced one Heat episode
+  (`scripts/trace_failed_episode.py`): the executor **ignores ALFWorld's atomic
+  `heat X with microwave 1`** action (right there in the admissible list) and
+  role-plays a physical microwave — open / insert / close / reopen / take out —
+  believing the potato is heated, then loops to the cap. Off-grammar coercion
+  was 0%, so it's not parsing; it's that our `ALFWORLD_EXECUTOR` prompt is
+  zero-shot while the paper uses **ReAct (worked demonstrations)**.
+- **But the quick fix did NOT pan out.** A one-sentence "these are atomic
+  actions" hint flipped the single traced episode (small-n trap!) but at n=140
+  moved the baseline only **+2.1pp (p=0.68, noise)** — Heat SR literally
+  unchanged 4/16=25%. On ckpt30 it went down (confounded by curator temp-1.0
+  repo-regeneration variance). **Reverted.** An instruction is too weak; even
+  when told not to, the model still opened the microwave.
+- **Still open.** The 14pp gap remains. Leading suspects: real ReAct **few-shot
+  worked exemplars** (much stronger than an instruction), or the served
+  `openrouter/qwen3-8b` quality vs the paper's local Qwen3-8B.
+
+---
+
 ## Current status (2026-05-26)
 
 - **Run:** `pathbv4` (wandb `okaris/skillos`), config

@@ -321,6 +321,13 @@ def main():
     p.add_argument("--max-steps", type=int, default=30)
     p.add_argument("--executor", default="infsh", choices=["heuristic", "infsh"])
     p.add_argument("--executor-app", default="openrouter/qwen3-8b")
+    p.add_argument("--executor-temperature", type=float, default=0.6,
+                   help="Executor decode temp. Eval baseline 0.6; GiGPO/paper-faithful 0.4.")
+    p.add_argument("--executor-top-p", type=float, default=0.95)
+    p.add_argument("--executor-top-k", type=int, default=20,
+                   help="Executor top_k. Set <=0 to disable (GiGPO-faithful).")
+    p.add_argument("--executor-reasoning", default="medium",
+                   help="reasoning_effort for the infsh executor (low/medium/high).")
     p.add_argument("--curator-temperature", type=float, default=1.0,
                    help="Curator decode temperature (training was 1.0). Use 0 for greedy.")
     p.add_argument("--curator-max-new-tokens", type=int, default=4096)
@@ -345,12 +352,12 @@ def main():
         exec_cfg.update({
             "app": args.executor_app,
             "history_length": 3,
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
+            "temperature": args.executor_temperature,
+            "top_p": args.executor_top_p,
+            "top_k": args.executor_top_k if args.executor_top_k > 0 else None,
             "max_tokens": 8192,
             "context_size": 32768,
-            "reasoning_effort": "medium",
+            "reasoning_effort": args.executor_reasoning,
         })
     from skillos.executor.executor import create_executor
     executor = create_executor(exec_cfg)

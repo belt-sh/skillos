@@ -39,9 +39,20 @@ Reproducing Table 1 from the paper (Qwen3-8B executor):
 
 | Method | Curator | Pick | Look | Clean | Heat | Cool | Pick2 | **Avg SR** | Steps |
 |---|---|---|---|---|---|---|---|---|---|
-| No Memory | - | 78.1 | 46.2 | 33.3 | 37.5 | 29.3 | 47.2 | 47.9 | 21.1 |
+| No Memory (paper) | - | 78.1 | 46.2 | 33.3 | 37.5 | 29.3 | 47.2 | 47.9 | 21.1 |
 | SkillOS (paper) | Qwen3-8B | - | - | - | - | - | - | **61.2** | **18.9** |
-| SkillOS (ours) | Qwen3-8B | - | - | - | - | - | - | TBD | TBD |
+| No Memory (ours) | - | 60 | 46 | 19 | 25 | 20 | 25 | 33.6 | - |
+| SkillOS (ours, ckpt30) | Qwen3-8B | 66 | 46 | 41 | 12 | 44 | 29 | **42.9** | - |
+
+**Status (2026-06-21):** first faithful Algorithm 1 run (`algo1v8lorakl`)
+completed the full 60-step schedule. Held-out lift is **significant at ckpt30:
++9.3pp over the no-memory baseline (p=0.035, paired McNemar, n=140)** — ~70% of
+the paper's lift. Two open gaps: (1) our no-memory **baseline is 14pp below the
+paper** (33.6 vs 47.9) — traced to the zero-shot executor ignoring ALFWorld's
+atomic `heat/cool/clean` verbs; a one-line prompt hint did **not** close it at
+scale (still open); (2) our checkpoint trajectory is **bimodal** (peaks at
+ckpt30) rather than the paper's monotone-to-60, likely the small effective batch
++ TRL-vs-verl framework swap. Full narrative in [`JOURNAL.md`](JOURNAL.md).
 
 ## Project Structure
 
