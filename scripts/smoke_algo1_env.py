@@ -123,6 +123,30 @@ def main() -> int:
     assert r <= 0.2, f"early-quit reward suspiciously high: {r}"
     print(f"OK: early-quit rollout reward = {r:.4f} (no r_task credit)")
 
+    # --- Deadline cut: positions past the deadline must be MASKED from r_task
+    #     (cut=True, success=None), NOT scored as failures, and must not crash.
+    env = algo1.Algo1CuratorEnv()
+    env.reset(group_id=2, task_type="pick", prompt=None)
+    asyncio.run(env.curate_and_advance([]))   # position 0 runs normally
+    asyncio.run(env.curate_and_advance([]))   # position 1 runs normally
+    ran_real = len([r for r in env._executor_results if not r.get("cut")])
+    env._deadline = 0.0                        # force deadline expired
+    cut_msgs = 0
+    while not env.done:
+        out = asyncio.run(env.curate_and_advance([]))
+        if "deadline reached" in out:
+            cut_msgs += 1
+        if env.done:
+            break
+    cut = [r for r in env._executor_results if r.get("cut")]
+    assert cut_msgs > 0 and len(cut) > 0, "expected some positions to be cut"
+    assert all(r.get("success") is None for r in cut), "cut results must not carry success"
+    r = env._finalize_reward()  # must not raise
+    # r_task is averaged only over the positions that actually RAN (ran_real-1
+    # informed positions); cut positions contribute nothing.
+    print(f"OK: deadline cut — {ran_real} ran, {len(cut)} cut/masked, "
+          f"reward={r:.4f} (no crash, cuts excluded from r_task)")
+
     print("SMOKE PASSED")
     return 0
 

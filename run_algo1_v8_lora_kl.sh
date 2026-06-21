@@ -33,7 +33,12 @@ export SKILLOS_PARALLEL_ROLLOUTS=256
 export SKILLOS_PARALLEL_JUDGES=24
 export SKILLOS_EXECUTOR_MAX_STEPS=25
 export SKILLOS_EXECUTOR_TIMEOUT_S=900
-export SKILLOS_PHASE_BUDGET_S=1500
+# Per-rollout wall-clock deadline (NOW ENFORCED, see Algo1CuratorEnv): once a
+# rollout runs past this, remaining positions are cut (executor skipped, masked
+# from r_task). 60 min lets normal rollouts finish all 10 positions while
+# capping rank skew to ~75 min (<< the 4h NCCL collective timeout) so a slow
+# composite-verb group can't strand the other ranks and SIGABRT the run.
+export SKILLOS_PHASE_BUDGET_S=3600
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # NB: the real NCCL collective timeout is the dist.init_process_group pre-init
 # in scripts/train_algo1.py (SKILLOS_NCCL_TIMEOUT_S, default 4h). NCCL_TIMEOUT_MS

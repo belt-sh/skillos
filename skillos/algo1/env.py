@@ -145,6 +145,17 @@ class Algo1CuratorEnv:
         self.reward = 0.0
         self.done = False
 
+        # Synchronized rollout deadline. All rollouts in a step reset within a
+        # quick serial loop, so per-rollout deadlines are ~aligned. Once a
+        # rollout passes its deadline, remaining positions are CUT (executor
+        # skipped, position masked from r_task — NOT scored as a failure), so
+        # the rollout finishes fast and every rank reaches the post-_generate
+        # NCCL gather within ~one in-flight episode of each other. Bounds
+        # inter-rank skew to << the collective timeout, preventing the 4h-hang
+        # SIGABRT that killed v8 at steps 59 and 54 (skew from slow composite
+        # -verb groups whose every position maxed out the 900s episode cap).
+        self._deadline = time.time() + _phase_budget_s
+
         group_id = kwargs.get("group_id")
         task_type = kwargs.get("task_type")
         if group_id is None or task_type is None:
@@ -218,6 +229,29 @@ class Algo1CuratorEnv:
             return (
                 f"[rollout complete] {self._position}/{_group_size} tasks "
                 f"played. final repo size = {len(self._repo)} skills."
+            )
+
+        # 2b) Synchronized deadline: if this rollout has run past its budget,
+        # CUT the remaining positions — skip the executor entirely (no 900s
+        # wait) and record a masked result (cut=True, success=None) so r_task
+        # excludes it rather than counting a false failure. Keeps ranks in
+        # lockstep at the NCCL gather. The curator still emits ops for cut
+        # positions, so r_fc / r_cnt (curation-quality terms) keep their
+        # honest gradient — only the executor-outcome term is masked.
+        import time as _time
+        if _time.time() > self._deadline:
+            print(f"[algo1] DEADLINE CUT slot={self._slot} group={self._group_id} "
+                  f"position={self._position} — skipping executor (masked from r_task)",
+                  file=sys.stderr, flush=True)
+            self._executor_results.append({
+                "task_description": f"<cut-position-{self._position}>",
+                "trajectory": [], "success": None, "cut": True,
+                "steps": 0, "gamefile": "", "skills_text": "",
+            })
+            self._position += 1
+            return (
+                f"[deadline reached] position {self._position}/{_group_size} cut — "
+                "emit your final curation operations; no more executor feedback."
             )
 
         # 3) Run executor at the next position. Two reasons for the
@@ -388,11 +422,15 @@ class Algo1CuratorEnv:
         # that quit before any informed position earns NO task reward — falling
         # back to position 0's success would pay the curator for the
         # executor's empty-repo baseline.
-        if len(self._executor_results) <= 1:
+        # Exclude position 0 (empty repo) AND deadline-cut positions: a cut
+        # never ran the executor, so counting it as a failure would bias the
+        # curator against slow task types. Masking = average over positions
+        # that actually ran.
+        tail = [r for r in self._executor_results[1:] if not r.get("cut")]
+        if not tail:
             r_task = 0.0
         else:
-            tail = self._executor_results[1:]
-            successes = [float(r.get("success", 0.0)) for r in tail]
+            successes = [float(r.get("success") or 0.0) for r in tail]
             r_task = sum(successes) / len(successes)
 
         r_fc = reward_function_call(self._ops_applied)
