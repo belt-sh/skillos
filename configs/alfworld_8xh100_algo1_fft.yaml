@@ -5,22 +5,24 @@
 # paper's monotone-to-60) is a LoRA artifact. If FFT gives a monotone curve,
 # LoRA (or KL) caused it; if still bimodal, it's the TRL-vs-verl framework.
 #
-# SHARDING DECISION — why ZeRO-2 + vLLM + beta=0 (the validated path), NOT ZeRO-3:
-#   Prior FFT losses (belt gotchas):
+# SHARDING DECISION — ZeRO-3 + vLLM colocate (EMPIRICALLY validated THIS stack):
+#   Prior FFT losses (belt gotchas) + this session's findings:
 #     1. v6 ZeRO-2 + KL → OOM (params 16G replicated + ref 16G + vLLM 32G).
-#     2. FSDP FULL_SHARD & SHARD_GRAD_OP → generation WEDGE (HF .generate hangs,
-#        0 steps, GPUs pinned, no crash). infsh/fft-grpo-fsdp-generation-wedge.
-#     3. ZeRO-2 without vLLM → 25-50x slower, step1 ~50min, NCCL watchdog blew.
-#   Validated path = ZeRO-2 + vLLM colocate (params REPLICATED → trivial vLLM
-#   weight-sync). A 2026-06-21 ZeRO-3+vLLM smoke ran (no OOM, 65.5G peak, step 1
-#   closed) BUT ZeRO-3 shards params, so the per-step vLLM weight-gather is
-#   unverified for correctness — declined for a multi-day commit (silent
-#   stale-weight training is the v5-v7 failure class). beta=0 drops the ref
-#   model → avoids the v6 OOM; the notes document 0.001 as a ~no-op (~1e-5 of
-#   loss at observed KL ~0.01). Footprint ≈ v8 LoRA (params 16 + opt 12 + grad
-#   2 + vLLM 32 ≈ 62G), which we know fits.
+#     2. FSDP FULL_SHARD/SHARD_GRAD_OP → generation WEDGE (GPUs pinned 100%).
+#     3. ZeRO-2 without vLLM → 25-50x slower, NCCL watchdog blew.
+#   The notes say "ZeRO-2 + vLLM colocate is validated" — but that is from an
+#   OLDER stack. On THIS stack (trl 1.4 / transformers 5.9 / deepspeed 0.19),
+#   ZeRO-2 + vLLM colocate HUNG: GPUs 0% util, 42 min no progress, first vLLM
+#   generation never produced tokens (2026-06-21). The ZeRO-3 + vLLM SMOKE, by
+#   contrast, WORKED: generation progressed (311 deadline cuts), step 1 closed,
+#   peak 65.5G/81.5G, no OOM, no wedge. So we use ZeRO-3 (the empirically
+#   working path here), which also SHARDS the ref model → beta=0.001 fits, so
+#   this is v8 EXACTLY minus LoRA (cleanest comparison).
+#   Residual risk: ZeRO-3 shards params → per-step vLLM weight-gather. Mitigation:
+#   watch the reward/KL trend over the first steps — sane movement confirms the
+#   weights sync (degenerate/flat reward = stale-weight bug, abort).
 #
-# Launch via ./run_algo1_fft.sh  (uses configs/accelerate_zero2.yaml).
+# Launch via ./run_algo1_fft.sh  (uses configs/accelerate_zero3.yaml).
 
 model: Qwen/Qwen3-8B
 output_dir: ./output/alfworld-8xh100-algo1-fft
@@ -34,8 +36,8 @@ learning_rate: 1.0e-6             # paper's EXACT FFT rate (no LoRA 10× compens
 num_generations: 8                # paper GRPO group size N=8
 max_completion_length: 4096       # paper Max Response Length
 temperature: 1.0                  # paper rollout temperature
-beta: 0.0                         # NO KL ref model — avoids the v6 ZeRO-2 OOM;
-                                  # notes document 0.001 as a ~no-op (see header).
+beta: 0.001                       # paper Table 4 KL; ZeRO-3 shards the ref model
+                                  # so it fits (smoke-proven 65.5G). = v8 exactly.
 loss_type: grpo                   # paper GRPO loss
 lr_scheduler_type: constant       # paper lr held constant
 
@@ -44,7 +46,7 @@ group_size: 10                    # paper |G|=10 (Data Grouping Size)
 
 use_vllm: true
 vllm_mode: colocate
-vllm_gpu_memory_utilization: 0.4  # same as v8 LoRA (proven to fit under ZeRO-2).
+vllm_gpu_memory_utilization: 0.3  # smoke-proven under ZeRO-3 (peak 65.5G/81.5G).
 
 use_lora: false                   # FULL fine-tune — the deviation under test
 

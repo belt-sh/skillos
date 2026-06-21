@@ -1,12 +1,10 @@
-# NOTE: SMOKE-ONLY. A 2026-06-21 smoke proved this is OOM-safe (FFT+KL peaks at
-# 65.5GB/81.5GB, step 1 closes, no generation wedge under vLLM colocate). But it
-# is NOT used for real runs: ZeRO-3 shards params, so the per-step vLLM
-# weight-gather correctness is unverified — risking silent stale-weight training
-# (the v5-v7 failure class). Real FFT uses the validated accelerate_zero2.yaml
-# (params replicated → trivial weight-sync) + beta=0. Keep this for future
-# ZeRO-3 weight-sync validation work.
-#
 # DeepSpeed ZeRO-3 for 8B FULL fine-tuning + KL ref model on 8×H100.
+# THE working FFT path on this stack (trl 1.4 / transformers 5.9 / deepspeed
+# 0.19): a 2026-06-21 smoke ran clean (FFT+KL peaks 65.5/81.5GB, step closes,
+# generation progresses under vLLM colocate). ZeRO-2 + vLLM — which older notes
+# call "validated" — HUNG here (GPUs 0%, 42min no progress). ZeRO-3 shards
+# params + ref model, so beta=0.001 fits. Residual risk: per-step vLLM
+# weight-gather under sharded params — watch the reward/KL trend to confirm.
 # ZeRO-3 shards PARAMS (not just optimizer+grads like ZeRO-2), so the replicated
 # 16GB param copy that OOM'd v6 (FFT+KL under ZeRO-2) drops to ~2GB/rank. The KL
 # reference model is also sharded, sidestepping both the v6 OOM and the TRL+FSDP

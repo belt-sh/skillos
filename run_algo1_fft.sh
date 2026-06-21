@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# SkillOS Algorithm 1 — FULL fine-tune, validated ZeRO-2 + vLLM path, beta=0.
-# v8 recipe minus LoRA. See configs/alfworld_8xh100_algo1_fft.yaml header for
-# why ZeRO-2 (not the smoke-only ZeRO-3) and beta=0.
+# SkillOS Algorithm 1 — FULL fine-tune, ZeRO-3 + vLLM colocate, beta=0.001.
+# v8 recipe minus LoRA. ZeRO-3 is the EMPIRICALLY-working path on this stack
+# (ZeRO-2+vLLM HUNG 2026-06-21); see config header.
 #
 # Usage:
 #   ./run_algo1_fft.sh                 # full run (max_steps from config)
@@ -43,6 +43,6 @@ echo "Launching SkillOS Algorithm 1 FFT (ZeRO-3 + beta=0.001) → $LOG"
 echo "  CHECKPOINT=${CHECKPOINT:-<fresh>}  PHASE_BUDGET_S=$SKILLOS_PHASE_BUDGET_S"
 
 accelerate launch \
-  --config_file configs/accelerate_zero2.yaml \
+  --config_file configs/accelerate_zero3.yaml \
   -m scripts.train_algo1 --config configs/alfworld_8xh100_algo1_fft.yaml \
   > "$LOG" 2>&1
