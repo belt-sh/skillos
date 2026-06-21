@@ -53,33 +53,49 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
   TRL/GRPO-vs-verl/FSDP framework swap, not a method failure. We recovered ~70%
   of the paper's lift; we did NOT reproduce their monotone-improvement-to-endpoint.
 
-### Open thread: the baseline is 14pp below the paper (33.6% vs 47.9%)
+### Open thread: the no-memory baseline is ~14pp below the paper (≈34% vs 47.9%)
 
-Same model, same 30-step cap, yet our `no_memory` baseline trails the paper's.
-Worked the `paper-repro-decode-settings-audit` hypothesis tree:
+Same model (Qwen3-8B), same 30-step cap, same Fig 9 prompt — yet our `no_memory`
+baseline trails the paper's 47.9%. We worked the full
+`paper-repro-decode-settings-audit` hypothesis tree to exhaustion. **Everything
+checkable is ruled out; the gap is real.** Ledger:
 
-- **Decode ruled out.** `scripts/debug_executor_audit.py`: `<action>` parses
-  cleanly at temp 0.4/0.6, reasoning is ON (~1.5k chars, the 8192 budget is not
-  truncating). Not a sampler problem.
-- **Failure shape:** 100% of baseline failures hit the step cap exactly (the
-  executor wanders, never completes), concentrated in composite verbs
-  (Clean/Cool/Heat/Pick2 ~19–25% vs Pick 60%).
-- **Structural cause found (real).** Traced one Heat episode
-  (`scripts/trace_failed_episode.py`): the executor **ignores ALFWorld's atomic
-  `heat X with microwave 1`** action (right there in the admissible list) and
-  role-plays a physical microwave — open / insert / close / reopen / take out —
-  believing the potato is heated, then loops to the cap. Off-grammar coercion
-  was 0%, so it's not parsing; it's that our `ALFWORLD_EXECUTOR` prompt is
-  zero-shot while the paper uses **ReAct (worked demonstrations)**.
-- **But the quick fix did NOT pan out.** A one-sentence "these are atomic
-  actions" hint flipped the single traced episode (small-n trap!) but at n=140
-  moved the baseline only **+2.1pp (p=0.68, noise)** — Heat SR literally
-  unchanged 4/16=25%. On ckpt30 it went down (confounded by curator temp-1.0
-  repo-regeneration variance). **Reverted.** An instruction is too weak; even
-  when told not to, the model still opened the microwave.
-- **Still open.** The 14pp gap remains. Leading suspects: real ReAct **few-shot
-  worked exemplars** (much stronger than an instruction), or the served
-  `openrouter/qwen3-8b` quality vs the paper's local Qwen3-8B.
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| Prompt text / few-shot | ruled out | Fig 9 (PDF `docs/skillos_paper.pdf`) is **verbatim** our `ALFWORLD_EXECUTOR` — zero-shot, no exemplars. The paper hits 47.9% with the same prompt. |
+| Precision / serving | ruled out | prior local bf16 vLLM (`quantization=None`) = 28% ≈ remote 30% (`infsh/precision-not-skillos-baseline-gap`). |
+| Decode (temp/reasoning/tokens) | ruled out | `scripts/debug_executor_audit.py`: `<action>` parses at temp 0.4/0.6, reasoning ON (~1.5k chars), 8192 budget not truncating. Reasoning-on was +13pp and necessary but **not sufficient** (`infsh/reasoning-fix-insufficient-baseline-gap`). |
+| Retrieval / seeds / averaging | ruled out | BM25 top-5 (matches); micro 33.6% ≈ macro 32.4%; paper runs 3 seeds, std ~1pp. |
+| Success detection | ruled out | alfworld requests only `won`; TextWorld reward is 1-on-win → `scores>0 ⟺ info['won']`. |
+| Env / ReAct harness | cosmetic only | diffed vs GiGPO `verl-agent` (`prompts/alfworld.py`, `env_package/alfworld/{envs,projection}.py`, `env_manager.py`): only differences are admissible-list formatting (comma vs newline-quoted, `help` excluded) and history format. Same info. |
+| K=20 batching artifact | no signature | baseline success uncorrelated with `executor_wave_seconds` (1662 vs 1671) or slot/wave position. |
+| Stale-baseline confound | ruled out | our compare-baseline file is a May-28 symlink, but it is **statistically identical per-type** to a fresh good-config run (Heat 4/16 and Look 6/13 identical) → harness reproducibly gives ~34%, 3 weeks apart. |
+
+**The structural mechanism (real, but unfixable by prompt).** Tracing a failed
+Heat episode (`scripts/trace_failed_episode.py`): the executor **ignores
+ALFWorld's atomic `heat X with microwave 1`** action (present in the admissible
+list) and role-plays a physical microwave — open / insert / close / reopen /
+take out — then loops to the step cap. Off-grammar coercion is 0% (not a parse
+bug). A one-sentence "these are atomic actions" hint flipped the single traced
+episode but moved the full n=140 baseline only **+2.1pp (p=0.68, noise)** — the
+classic small-n trap. **Reverted.**
+
+**A false alarm worth recording.** The knowledge entry
+`infsh/skillos-validated-executor-config` claims our config *reproduces* the
+baseline at **42.9% / 21.5 steps**. It does not — that profile matches our
+**ckpt30 with-memory** run (42.9% / 22.2 steps), not no-memory (33.6% / 23.4
+steps). The entry **mislabeled a with-memory result as the baseline**; the
+correct prior observation is `infsh/reasoning-fix-insufficient-baseline-gap`
+(~30-36%, gap remains), which matches us.
+
+**Net:** baseline is robustly **~34%**, the **14pp gap is real**, and (crucially)
+the **+9.3pp ckpt30 lift is NOT a baseline confound** — it's measured against a
+same-config baseline. The residual is either the canonical zero-shot Qwen3-8B
+genuinely scoring ~34% on ALFWorld (paper's baseline optimistic), or an
+undocumented detail in the paper's GiGPO-deferred executor harness. **Last live
+test:** a Qwen3-32B executor baseline — if it reproduces the paper's 54.5%, the
+gap is 8B-specific; if it also trails ~14pp, the whole zero-shot baseline column
+is hard to reproduce. (Question for the authors, not a bug we can find.)
 
 ---
 

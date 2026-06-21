@@ -240,6 +240,32 @@ This is the biggest deviation. Worth splitting into two parts.
 
 ---
 
+## 13. No-memory executor baseline ~14pp below the paper (UNRESOLVED — not a bug)
+
+Our frozen-executor no-memory ALFWorld baseline is **~34%** (140 valid_seen),
+vs the paper's **47.9%** — same Qwen3-8B, same 30-step cap, same Fig 9 prompt.
+Audited the entire decode/serving/harness hypothesis tree (full ledger in
+`JOURNAL.md`, 2026-06-21). **Everything checkable is ruled out:** prompt text
+(Fig 9 verbatim, from `docs/skillos_paper.pdf`), precision (local bf16 ≈ remote),
+decode (reasoning on, 8192 budget, parse clean), retrieval (BM25 top-5), seeds,
+averaging, success detection (`scores>0 ⟺ info['won']`), env/ReAct harness
+(diffed vs GiGPO `verl-agent` — only cosmetic admissible/history formatting
+differs), and K=20 batching (no degradation signature).
+
+Mechanism (real but not prompt-fixable): the executor ignores ALFWorld's atomic
+`heat/cool/clean X with Y` actions and role-plays the physical procedure,
+timing out on composite verbs (Clean/Cool/Heat/Pick2). A one-line grammar hint
+did not move it at n=140 (+2.1pp, p=0.68).
+
+**Important:** this is a baseline (no-memory) divergence and does **not** invalidate
+the curator result — the **+9.3pp ckpt30 lift is measured against this same
+baseline** and is real. The residual is either the canonical zero-shot Qwen3-8B
+genuinely scoring ~34% (paper's baseline optimistic) or an undocumented detail
+in the paper's GiGPO-deferred executor harness. Open question for the authors.
+NOTE: the knowledge entry `infsh/skillos-validated-executor-config` claims the
+baseline reproduces at 42.9% — that is a **mis-record of the ckpt30 with-memory
+number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-gap`.
+
 ## Open audit items (verify next time we touch them)
 
 - [x] Reward weights `λ_f=1.0, λ_u=0.1, λ_c=0.05` — confirmed exact match in
