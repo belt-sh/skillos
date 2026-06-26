@@ -52,6 +52,7 @@ from pathlib import Path
 
 # Reuse the existing eval's executor-episode building blocks.
 from scripts.eval_alfworld import classify_task, extract_task_description
+from skillos.curator.prompts import format_trajectory
 
 # Tool schemas exposed to the curator. Mirrors the methods on CuratorEnv that
 # TRL auto-discovered during training (new_skill_insert / skill_update /
@@ -101,14 +102,6 @@ TOOLS_SCHEMA = [
         },
     },
 ]
-
-
-def _format_trajectory(traj_steps: list[dict]) -> str:
-    parts = []
-    for s in traj_steps:
-        parts.append(f"Step {s['step']}: ACTION: {s['action']}")
-        parts.append(f"        OBSERVATION: {s['observation']}")
-    return "\n".join(parts)
 
 
 def run_executor_wave_with_trace(env, executors, repo, max_steps: int, pool,
@@ -227,7 +220,7 @@ class CuratorInference:
         """Generate curation ops for one trajectory and apply them to `repo`."""
         past = repo.retrieve(traj_result["task"], top_k=5)
         past_text = repo.format_skills(past) if past else ""
-        traj_text = _format_trajectory(traj_result["trajectory"])
+        traj_text = format_trajectory(traj_result["trajectory"])
         user = self._template.format(
             task_description=traj_result["task"],
             past_skills=past_text,

@@ -1,5 +1,15 @@
 """Prompts from SkillOS paper (arXiv:2605.06614v1), Appendix A."""
 
+
+def format_trajectory(steps) -> str:
+    """Render executor trajectory steps into the curator-input trace format."""
+    parts = []
+    for s in steps:
+        parts.append(f"Step {s['step']}: ACTION: {s['action']}")
+        parts.append(f"        OBSERVATION: {s['observation']}")
+    return "\n".join(parts)
+
+
 CURATOR_SYSTEM = """\
 # Role
 You are an expert with a sophisticated skills curator. Our overall goal is to accomplish agent tasks. \

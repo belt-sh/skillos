@@ -9,8 +9,6 @@ to the SkillRepo.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 
 from skillos.skills.repo import SkillRepo
@@ -23,37 +21,6 @@ class CurationOp:
     arguments: dict
     valid: bool = True
     executed: bool = False
-
-
-def parse_tool_calls(model_output: str) -> list[CurationOp]:
-    """Parse tool calls from model output.
-
-    Handles both structured tool call format (from TRL) and
-    JSON-in-text format that models sometimes produce.
-    """
-    ops = []
-
-    # Try to find function call JSON blocks
-    # Pattern: {"name": "...", "arguments": {...}}
-    for match in re.finditer(
-        r'\{\s*"name"\s*:\s*"(new_skill_insert|skill_update|skill_delete)".*?\}(?=\s*(?:\{|$))',
-        model_output,
-        re.DOTALL,
-    ):
-        try:
-            call = json.loads(match.group())
-            ops.append(CurationOp(
-                name=call["name"],
-                arguments=call.get("arguments", {}),
-            ))
-        except json.JSONDecodeError:
-            ops.append(CurationOp(
-                name="unknown",
-                arguments={},
-                valid=False,
-            ))
-
-    return ops
 
 
 def apply_curation_ops(repo: SkillRepo, ops: list[CurationOp]) -> list[CurationOp]:

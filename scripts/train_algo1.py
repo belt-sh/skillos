@@ -112,7 +112,6 @@ def train(config: dict) -> None:
     # (postmortem 2026-06-10, bug 3).
     from skillos.envs import curator_env as classic_env
     configure_algo1(
-        executor=None,
         judge_submit=classic_env._submit_judge,
         num_generations=num_generations,
         group_size=group_size,
@@ -175,6 +174,8 @@ def train(config: dict) -> None:
 
     if config.get("max_steps"):
         grpo_kwargs["max_steps"] = config["max_steps"]
+
+    grpo_kwargs["seed"] = config.get("seed", 42)
 
     dataset = build_dataset(num_episodes, group_size)
     args = GRPOConfig(**grpo_kwargs)

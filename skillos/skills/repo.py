@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 
 import yaml
@@ -43,6 +44,9 @@ class SkillRepo:
         self.skills: dict[str, Skill] = {}
         self._bm25: BM25Okapi | None = None
         self._bm25_dirty = True
+        # One repo is shared across the concurrent reward probes (curator_env
+        # fans env._repo to N threads), which race the lazy index rebuild.
+        self._index_lock = threading.Lock()
 
     def insert(self, skill_name: str, content: str) -> bool:
         """Insert a new skill. Returns True if successful."""
@@ -96,7 +100,9 @@ class SkillRepo:
         if not self.skills:
             return []
         if self._bm25_dirty:
-            self._rebuild_index()
+            with self._index_lock:
+                if self._bm25_dirty:  # another probe thread may have rebuilt it
+                    self._rebuild_index()
         tokenized_query = query.lower().split()
         scores = self._bm25.get_scores(tokenized_query)
         skill_list = list(self.skills.values())

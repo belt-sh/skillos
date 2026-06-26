@@ -22,28 +22,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
-# Map alfworld game file paths to one of the 6 paper task types.
-# Filenames look like: pick_and_place_simple-Apple-None-CounterTop-7
-TASK_TYPE_REGEX = [
-    ("Pick",   re.compile(r"pick_and_place_simple", re.I)),
-    ("Look",   re.compile(r"look_at_obj_in_light",  re.I)),
-    ("Clean",  re.compile(r"pick_clean_then_place", re.I)),
-    ("Heat",   re.compile(r"pick_heat_then_place",  re.I)),
-    ("Cool",   re.compile(r"pick_cool_then_place",  re.I)),
-    ("Pick2",  re.compile(r"pick_two_obj",          re.I)),
-]
-
+from skillos.envs.task_types import DISPLAY, classify_gamefile
 
 def classify_task(gamefile: str) -> str:
-    for label, pat in TASK_TYPE_REGEX:
-        if pat.search(gamefile):
-            return label
-    return "Other"
+    """Map an alfworld gamefile path to its Table-1 task-type column."""
+    return DISPLAY[classify_gamefile(gamefile)]
 
 
 def extract_task_description(observation: str) -> str:

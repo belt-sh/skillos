@@ -8,18 +8,7 @@ Paper weights: λ_f=1.0, λ_u=0.1, λ_c=0.05
 from __future__ import annotations
 
 
-def reward_task(env_rewards: list[float], skip_first: bool = True) -> float:
-    """Average success rate over tasks in a group, skipping first (empty repo).
-
-    r_task = 1/(|G|-1) * sum(success_i for i=2..|G|)
-    """
-    if not env_rewards:
-        return 0.0
-    rewards = env_rewards[1:] if skip_first and len(env_rewards) > 1 else env_rewards
-    return sum(rewards) / max(len(rewards), 1)
-
-
-def reward_function_call(ops: list[dict], skill_repo=None) -> float:
+def reward_function_call(ops: list[dict]) -> float:
     """Fraction of curator function calls that are valid and execute successfully.
 
     r_fc = 1/|G| * sum(Valid(c_i))

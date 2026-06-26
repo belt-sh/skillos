@@ -97,6 +97,157 @@ test:** a Qwen3-32B executor baseline — if it reproduces the paper's 54.5%, th
 gap is 8B-specific; if it also trails ~14pp, the whole zero-shot baseline column
 is hard to reproduce. (Question for the authors, not a bug we can find.)
 
+**RESOLVED — decode is NOT the lever, gap is 8B-specific (2026-06-25).** Ran a
+4-config executor-decode sweep as parallel `no_memory` baselines (n=140 each,
+remote executor, no GPU): `ctrl` (temp 0.6 / top_p 0.95 / top_k 20, our default),
+`gigpo` (0.4 / 1.0 / off — full verl parity), `temp` (0.4 / 0.95 / 20), `gigpo_hi`
+(0.4 / 1.0 / off, reasoning high). Paired McNemar vs ctrl:
+
+| config | overall SR | Δ vs ctrl | p |
+|---|---|---|---|
+| ctrl (0.6/0.95/20/med) | 36.4% | — | — |
+| temp (0.4/0.95/20/med) | 39.3% | +2.9 | 0.57 |
+| gigpo (0.4/1.0/off/med) | 34.3% | −2.1 | 0.70 |
+| gigpo_hi (0.4/1.0/off/high) | 34.3% | −2.1 | 0.69 |
+
+**All four statistically identical (every p > 0.5).** No decode config reaches the
+paper's 47.9%. Findings: (1) temp 0.4 is *nominally* best (39.3%) but +2.9pp at
+p=0.57 is noise — the floor is confirmed empirically since this `ctrl` run (36.4%)
+vs the canonical same-config run (33.6%) swung 2.8pp with zero config change.
+(2) **Full GiGPO "parity" (top_p 1.0 / top_k off) is nominally WORSE** — those are
+verl defaults tuned for Qwen2.5; the Qwen3 model card specifies thinking-mode
+temp 0.6 / top_p 0.95 / top_k 20, which is *exactly our default*, so matching
+GiGPO fights the model card (`infsh/qwen3-sampling-from-model-card`). (3) High
+reasoning didn't help. **Conclusion: executor decode is exhausted and ruled out;
+the 8B zero-shot baseline does not reach 47.9% under any matchable config, while
+the 32B executor reproduces the paper's 54.5% — the gap is model-specific, a
+reproducibility finding / question for the authors, not a knob on our end.** Eval
+JSONLs: `output/eval-decode/{ctrl,gigpo,temp,gigpo_hi}.jsonl`.
+
+---
+
+## FFT control run — is the bimodality a LoRA artifact? (2026-06-24)
+
+- **Run:** `algo1fft` (wandb `okaris/skillos`), config
+  `configs/alfworld_8xh100_algo1_fft.yaml`, launcher `run_algo1_fft.sh`. This is
+  **v8 EXACTLY minus LoRA**: full fine-tune, ZeRO-3 + vLLM colocate, `beta=0.001`,
+  `lr=1e-6`, all other paper hyperparams identical. Purpose: v8 (LoRA) gave a
+  **bimodal** held-out trajectory (peak ckpt30, not the paper's monotone-to-60).
+  Question: did **LoRA** cause the oscillation, or is it the framework/algorithm?
+- **Sharding:** ZeRO-3 was the empirically-working FFT path on this stack
+  (trl 1.4 / transformers 5.9 / deepspeed 0.19). **ZeRO-2 + vLLM colocate HUNG**
+  here (GPUs 0% util, 42 min no progress) despite older notes calling it
+  "validated" — those notes are from an older stack. ZeRO-3 shards params + ref
+  model, so `beta=0.001` fits (smoke peak 65.5G; sustained 80.3G/81.5G, 0 OOM
+  across the full 60-step run).
+- **Training: COMPLETE.** Hit 60/60 on 2026-06-24, exit 0. ~70 min/step (FFT pays
+  a per-step all-gather tax for vLLM-colocate generation under sharded params).
+
+- **Held-out eval (paired-by-gamefile McNemar vs `no_memory` 33.6%, n=140):**
+
+  | checkpoint | SR | Δ vs baseline | p |
+  |---|---|---|---|
+  | ckpt10 | 40.7% | +7.1 | 0.053 |
+  | **ckpt20** | **44.3%** | **+10.7** | **0.032** |
+  | ckpt25 | 39.3% | +5.7 | 0.20 |
+  | ckpt30 | 33.6% | +0.0 | 1.00 |
+  | ckpt35 | 36.4% | +2.9 | 0.60 |
+  | ckpt40 | 38.6% | +5.0 | 0.26 |
+  | ckpt50 | 31.4% | −2.1 | 0.72 |
+  | ckpt60 | 39.3% | +5.7 | 0.18 |
+
+- **Per-type vs the paper (Qwen3-8B executor, n=140; SR% / avg steps).** Paper
+  Table 1 alongside ours (baseline, best LoRA = v8 ckpt30, best FFT = ckpt20):
+
+  | Type | Paper No-Mem | Paper SkillOS | Ours No-Mem | Ours LoRA30 | Ours FFT20 |
+  |---|---|---|---|---|---|
+  | Pick  | 78.1 / 21 | 85.7 / 19 | 60 / 17 | 66 / 15 | 60 / 17 |
+  | Look  | 46.2 | 56.4 | 46 / 20 | 46 / 19 | 38 / 21 |
+  | Clean | 33.3 | 54.3 | 19 / 26 | 41 / 24 | 48 / 21 |
+  | Heat  | 37.5 | 43.8 | 25 / 28 | 12 / 28 | 31 / 24 |
+  | Cool  | 29.3 | 46.7 | 20 / 27 | 44 / 25 | 40 / 23 |
+  | Pick2 | 47.2 | 62.5 | 25 / 25 | 29 / 26 | 33 / 25 |
+  | **Avg** | **47.9 / 21.1** | **61.2 / 18.9** | **33.6 / 23** | **42.9 / 22** | **44.3 / 22** |
+
+- **Lift over own baseline (Δpp) — what the curator actually adds:**
+
+  | Type | Paper (SkillOS−NoMem) | Ours FFT20 | Ours LoRA30 |
+  |---|---|---|---|
+  | Pick  | +7.6  | +0  | +6 |
+  | Look  | +10.2 | −8  | +0 |
+  | Clean | +21.0 | **+29** | +22 |
+  | Heat  | +6.3  | **+6** | −13 |
+  | Cool  | +17.4 | **+20** | +24 |
+  | Pick2 | +15.3 | +8  | +4 |
+  | **Avg** | **+13.3** | **+10.7** | **+9.3** |
+
+  **Read:** measured as *lift*, FFT (+10.7) is within 2.6pp of the paper (+13.3),
+  and on the **appliance verbs the curator does its job** — Clean +29 (paper +21),
+  Cool +20 (paper +17), Heat +6 (matches paper). The absolute shortfall lives in
+  the **baseline**, concentrated on the no-appliance tasks the curator can't fix:
+  Pick (ours 60 vs paper 78) and Pick2 (25 vs 47), while Look matches exactly
+  (46=46). A skill can't paper over a worse navigate/commit phase. LoRA uniquely
+  *hurts* Heat (−13) where FFT helps (+6). Steps already drop (23→22; Clean
+  26→21) — the paper's "procedural shortcut / Steps ↓" mechanism reproduces.
+
+- **Answer: the bimodality is NOT a LoRA artifact.** FFT reproduces the same
+  oscillating shape — significant early peak (ckpt20 +10.7pp, p=0.032), collapse
+  to exact baseline parity (ckpt30, 17:17 discordant), partial recovery. The peak
+  index shifted (FFT step20 vs LoRA step30), but peak indices are RNG-path-
+  dependent; the **shape** generalizes. Drop LoRA, keep everything else, get the
+  same curve → the oscillation is **framework/algorithm-level** (small-batch GRPO
+  bouncing between local optima on a narrow probe distribution, TRL path), not the
+  LoRA parameterization.
+- **FFT's best beats LoRA's best:** ckpt20 **+10.7pp (significant)** vs v8 LoRA's
+  +9.3pp, now within ~2.6pp of the paper's claimed +13.3pp lift. Ship
+  `checkpoint-20` as the best-on-heldout FFT artifact (not last-step ckpt60).
+- **Not a missing-KL-anchor U-shape.** `beta=0.001` is present; the troughs are
+  shallow and non-significant (ckpt30 p=1.0, ckpt50 p=0.72), not the deep
+  significant trough that flags a dropped KL anchor.
+- **Next lever** (per the bimodal branch): broaden the probe/training-task
+  distribution. Adding steps with the same setup just oscillates in the same band;
+  we are already on full Algorithm 1, so steps aren't the knob.
+- **Per-type caveat:** Heat stays weak across every arm (6–31%), and per-type
+  wins trade off between checkpoints (ckpt40 leads Pick 80% but bottoms Heat 6%) —
+  aggregate SR hides this. See the Heat note below.
+
+### Why Heat is the weakest type — it's the executor, not a bug (2026-06-24)
+
+Heat sits lowest across **every** checkpoint and the baseline (22% aggregate vs
+Pick's 68%). It *feels* like a bug, but the evidence says it's a behavioral
+failure of the **frozen Qwen3-8B executor**, not our harness:
+
+- **Failure mode is uniform, not Heat-specific.** Every failure of *every* type
+  ends at the 30-step cap (`fail@maxstep = 100%` for Clean/Cool/Heat/Look/Pick/
+  Pick2). Heat episodes that win, win in ~14 steps (same as Cool 13, Pick2 14).
+  So success-detection and step-accounting work fine for Heat — it just runs out
+  of steps more often.
+- **The weak types are exactly the appliance/atomic-verb tasks.** Clean (28%),
+  Cool (28%), Heat (22%) all require an atomic verb — `clean X with sinkbasin`,
+  `cool X with fridge`, `heat X with microwave`. Pick (68%) needs no appliance.
+  Heat is marginally the worst because the microwave has the most role-play
+  states (open/close) to get lost in, and its n is smallest (144) so it's the
+  noisiest.
+- **Live trace of a Heat episode** (`scripts/trace_failed_episode.py`, task "put a
+  hot potato in fridge"): the executor finds and takes the potato, walks to the
+  microwave — all correct — then, with **`heat potato 1 with microwave 1`
+  present in the admissible list AND named verbatim in its own reasoning**, it
+  *defers* the atomic verb and role-plays a physical microwave instead:
+  `open microwave 1` → `move potato 1 to microwave 1` → `close microwave 1` → …
+  Every emitted action is `admissible? True` (off-grammar coercion is **0%** —
+  not a parse bug). The trap: `move potato 1 to microwave 1` takes the potato out
+  of the agent's hand, and ALFWorld's `heat X with microwave` wants the object
+  *held* — so the role-play can forfeit the very action it's trying to set up,
+  and the episode loops to the cap.
+
+This is the same atomic-verb gap behind the `no_memory` baseline shortfall
+(`infsh/executor-atomic-verb-gap`). A one-sentence "these are atomic actions"
+hint flipped a single traced episode but moved the full n=140 baseline only
++2.1pp (p=0.68, noise) — reverted. The fix isn't in our code; it's the frozen
+8B executor's instinct to simulate real-world causality instead of using
+ALFWorld's atomic abstraction. **Not a bug we can patch — a property of the
+model the paper defers to GiGPO for.**
+
 ---
 
 ## Current status (2026-05-26)

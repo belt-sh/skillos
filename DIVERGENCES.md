@@ -55,6 +55,21 @@ This is the biggest deviation. Worth splitting into two parts.
   offload to squeeze full FT onto 96 GB at the cost of ~2× wall time, or
   (b) we move to 8× H100 where full FT fits trivially.
 
+> **Update 2026-06-24 — FFT control run settles the LoRA question.** We ran
+> `algo1fft` (`configs/alfworld_8xh100_algo1_fft.yaml`): **v8 EXACTLY minus
+> LoRA** — full fine-tune, ZeRO-3 + vLLM colocate, `beta=0.001`, `lr=1e-6`, all
+> other paper hyperparams identical. ZeRO-3 (not the older-stack "validated"
+> ZeRO-2, which **hung** here) shards params + ref model so the KL term fits; 60
+> steps, 0 OOM. The held-out McNemar sweep is **still bimodal** (peak ckpt20
+> +10.7pp p=0.032 → collapse to baseline parity ckpt30 → recovery), the same
+> oscillating shape as v8 LoRA (which peaked at ckpt30). **Conclusion: the
+> bimodality is NOT a LoRA artifact** — it's framework/algorithm-level
+> (small-batch GRPO on a narrow probe distribution, TRL path). FFT's best arm
+> (+10.7pp) actually beats LoRA's best (+9.3pp) and lands within ~2.6pp of the
+> paper's +13.3pp. So LoRA was a faithful-enough stand-in for the trajectory
+> *shape*; it did not cause the deviation from the paper's monotone curve. See
+> `JOURNAL.md` 2026-06-24 for the full table.
+
 ### Mitigations on the table (single-GPU path)
 - **CPU-offload optimizer (DeepSpeed ZeRO-2 with offload_optimizer):** brings
   full-FT peak from ~180 GB to ~70-80 GB. Slows training ~1.5-2×.

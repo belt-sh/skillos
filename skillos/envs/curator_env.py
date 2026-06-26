@@ -32,8 +32,12 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE
+from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE, format_trajectory
 from skillos.envs.config import make_alfworld_env
+from skillos.envs.task_types import (
+    classify_description as _task_type,
+    classify_gamefile as _classify_gamefile,
+)
 from skillos.executor.executor import Executor, HeuristicExecutor, create_executor
 from skillos.rewards.judge import Judge, HeuristicJudge, create_judge
 from skillos.skills.repo import SkillRepo
@@ -167,12 +171,6 @@ def configure(executor_config: dict | None = None,
         _num_generations = max(1, int(num_generations))
     if num_probe_tasks is not None:
         _num_probe_tasks = max(1, int(num_probe_tasks))
-
-
-def reset_shared_state() -> None:
-    """Reset shared state at the start of a new task group (paper §3.2.1)."""
-    global _shared_skill_repo
-    _shared_skill_repo = SkillRepo()
 
 
 # ---------------------------------------------------------------------------
@@ -498,27 +496,6 @@ def _probe_seed_base(seed_gamefile: str) -> int:
     return int(h[:8], 16)
 
 
-def _task_type(description: str) -> str:
-    """Classify an ALFWorld task description into one of the 6 task types.
-
-    The partition (paper §3.2.1) is over these types; probes sample tasks of
-    the same type as the group's seed. Order matters: 'pick2' (two) before the
-    transform verbs, which precede the generic pick/look fallbacks.
-    """
-    d = (description or "").lower()
-    if "two" in d:
-        return "pick2"
-    if "clean" in d:
-        return "clean"
-    if "hot" in d or "heat" in d:
-        return "heat"
-    if "cool" in d:
-        return "cool"
-    if ("look" in d or "examine" in d) and "lamp" in d:
-        return "look"
-    return "pick"
-
-
 def _borrow_probe_env():
     """Borrow a reusable alfworld env for a probe episode, or build one (up to
     the rollout-parallelism cap). Blocks briefly only if all are in use."""
@@ -656,22 +633,6 @@ def _run_probe(repo: SkillRepo, want_type: str | None, max_steps: int,
         _return_probe_env(env)
 
 
-def _classify_gamefile(gf: str) -> str:
-    """Task type from the ALFWorld gamefile path (reliable, no env run)."""
-    g = (gf or "").lower()
-    if "pick_two" in g:
-        return "pick2"
-    if "pick_clean" in g:
-        return "clean"
-    if "pick_heat" in g:
-        return "heat"
-    if "pick_cool" in g:
-        return "cool"
-    if "look_at" in g:
-        return "look"
-    return "pick"
-
-
 def _build_type_seed_index(n: int = 400) -> None:
     """Scan `n` seeds once, bucketing each into its task type. Cheap (local
     resets, no executor) and one-time."""
@@ -779,12 +740,6 @@ def _extract_task_description(observation: str) -> str:
     return observation.splitlines()[0].strip()
 
 
-def _format_trajectory(result: dict) -> str:
-    parts = []
-    for step in result["trajectory"]:
-        parts.append(f"Step {step['step']}: ACTION: {step['action']}")
-        parts.append(f"        OBSERVATION: {step['observation']}")
-    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -873,7 +828,7 @@ class CuratorEnv:
             self._group_type = _group_types.get(self._group_id, _task_type(result["task_description"]))
         _on_rollout_start(self._slot)
 
-        trajectory_text = _format_trajectory(result)
+        trajectory_text = format_trajectory(result["trajectory"])
         result_text = "Success" if result["success"] else "Failure"
         curator_input = CURATOR_INPUT_TEMPLATE.format(
             task_description=result["task_description"],

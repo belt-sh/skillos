@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Any
 
-from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE
+from skillos.curator.prompts import CURATOR_INPUT_TEMPLATE, format_trajectory
 from skillos.skills.repo import SkillRepo
 
 # --- Module-level state (mirrors envs.curator_env structure) ----------------
@@ -44,8 +44,8 @@ _batch_lock = threading.Lock()
 _group_sequences: dict[int, list[int]] = {}
 _group_types: dict[int, str] = {}
 
-# Executor + judge client handles; populated by configure().
-_executor = None
+# Judge client handle; populated by configure(). The executor is reused from
+# the classic env via _run_probe, so algo1 holds no executor handle of its own.
 _judge_submit = None  # callable: content_str -> Future[float]
 
 # Phase budget across all of a step's position-1 executor calls; shared
@@ -55,24 +55,15 @@ _executor_timeout_s: float = float(os.environ.get("SKILLOS_EXECUTOR_TIMEOUT_S", 
 _judge_timeout_s: float = float(os.environ.get("SKILLOS_JUDGE_TIMEOUT_S", "60"))
 
 
-def configure(*, executor, judge_submit, num_generations: int, group_size: int) -> None:
-    """Wire the env to a configured executor/judge and pin the GRPO/G sizes."""
-    global _executor, _judge_submit, _num_generations, _group_size
-    _executor = executor
+def configure(*, judge_submit, num_generations: int, group_size: int) -> None:
+    """Wire the env to a configured judge and pin the GRPO/G sizes."""
+    global _judge_submit, _num_generations, _group_size
     _judge_submit = judge_submit
     _num_generations = num_generations
     _group_size = group_size
 
 
 # --- Helpers ---------------------------------------------------------------
-
-def _format_trajectory(result: dict) -> str:
-    parts = []
-    for step in result.get("trajectory", []):
-        parts.append(f"Step {step['step']}: ACTION: {step['action']}")
-        parts.append(f"        OBSERVATION: {step['observation']}")
-    return "\n".join(parts)
-
 
 def _build_curator_input(task_description: str, past_skills: str,
                          trajectory_text: str, success: bool) -> str:
@@ -292,7 +283,7 @@ class Algo1CuratorEnv:
         curator_input = _build_curator_input(
             task_description=result["task_description"],
             past_skills=result.get("skills_text", ""),
-            trajectory_text=_format_trajectory(result),
+            trajectory_text=format_trajectory(result.get("trajectory", [])),
             success=bool(result.get("success")),
         )
         # Accumulate |χ| across positions so r_comp = 1 - |S|/|χ| compares the
