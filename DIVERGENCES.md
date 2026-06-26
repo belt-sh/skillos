@@ -11,15 +11,54 @@ Living document. Every time the implementation deviates from
 
 Order matters: things at the top affect results most.
 
-> **Current setup (2026-05-26):** we have migrated off the single-GPU/LoRA path.
-> The active run (`configs/alfworld_8xh100_pathb.yaml`, `run_pathb.sh`) is a
-> **full fine-tune of Qwen3-8B on 8×H100 with vLLM colocate**, frozen Qwen3-8B
-> executor + Qwen3-32B judge on inference.sh. Entries below are annotated where
-> this supersedes the original single-GPU framing. The biggest *new* divergence
-> is the **Path B transfer-probe `r_task`** (entry #11) — read `JOURNAL.md` for
-> the why.
+> **Current setup (2026-06-26):** the result-producing runs are **full
+> Algorithm 1** on 8×H100 — `algo1v8` (LoRA r=32 + KL) and `algo1fft` (full
+> fine-tune), `configs/alfworld_8xh100_algo1_*.yaml`, vLLM colocate, frozen
+> Qwen3-8B executor + Qwen3-32B judge on inference.sh. **Algorithm 1 SUPERSEDED
+> "Path B"**: it walks the real evolving |G|=10 task sequence (`curate_and_advance`)
+> and computes the paper's `r_task = mean success over positions 2..|G|`. Entries
+> #6/#7/#11 below describe the abandoned Path B and are annotated as superseded.
+>
+> **The biggest live, result-relevant divergence is now task GROUPING (#0).**
+> The paper's own ablation (Table 3) says grouping is the single most important
+> design choice; we diverge from it in two un-tested ways (uniform type
+> distribution + no curriculum). Framework is **TRL, not verl** (#14) — a
+> confound present in every run.
 
 ---
+
+## 0. Task grouping: uniform type distribution + no curriculum (UNTESTED — likely material)
+
+This is the highest-priority open divergence because the paper's **Table 3
+ablation names grouping the single most impactful design choice** (removing it is
+the largest drop, 61.2 → 57.3). We diverge in three ways:
+
+- **Type distribution.**
+  - **Paper (§3.2.1 / B.2):** partition the real training set `D` into same-type
+    groups, so the number of groups of each type follows ALFWorld's **natural type
+    frequencies** (Pick-heavy: the valid split is ~25% Pick, ~9% Look, ~11% Heat).
+  - **Ours:** `train_algo1.py` assigns group types **round-robin** (`i % 6`) →
+    **uniform** ~1/6 each (~59 of 355 groups per type). We over-sample the rare
+    types (Look, Heat) and under-sample Pick.
+- **Within-group ordering / curriculum.**
+  - **Paper (Stage 2, Table 5):** seed a task, append related successors via a
+    soft-Jaccard dependency gate with an **easy→hard curriculum** (p↑=0.80,
+    difficulty deltas).
+  - **Ours:** `sample_group_seeds` does `rng.sample(same-type pool)` — random,
+    no curriculum, no dependency structure. (Whether the curriculum applies to
+    ALFWorld at all is genuinely ambiguous in the paper — it skips the *annotation*
+    for ALFWorld but doesn't clearly say it skips the *ordering*.)
+- **Grouping key.** Paper groups by soft-Jaccard over latent attributes; we group
+  by the coarser ALFWorld **task type** (the paper does say the 6 types are used
+  as the ALFWorld partition, so this part is defensible).
+- **Impact (hypothesized):** a flat, unstructured type distribution is exactly the
+  "narrow/odd probe distribution" we have been blaming for the **bimodal training
+  trajectory** (peak → collapse → recovery) and the residual lift gap. It also
+  creates a **train(uniform)/eval(natural) mismatch** the paper doesn't have — the
+  held-out eval *is* the natural distribution.
+- **Status:** `untested` — the cheapest high-value experiment available. First
+  test: switch type assignment to natural ALFWorld frequencies (a few lines), keep
+  everything else, and see whether the trajectory stabilizes.
 
 ## 1. ~~Single GPU~~ 8×H100, and ~~LoRA~~ full fine-tune (RESOLVED)
 
@@ -140,7 +179,15 @@ This is the biggest deviation. Worth splitting into two parts.
 - **Impact:** matches paper's step budget; removes the low-`r_task` bias.
 - **Status:** `resolved` on the 8×H100 path (env override to 30)
 
-## 6. Grouped task streams — replaced by Path B transfer-probe (see #11)
+## 6. Grouped task streams — Path B → SUPERSEDED by Algorithm 1
+
+> **Update 2026-06-26 — Algorithm 1 implements the real grouped task streams.**
+> The active runs walk the evolving |G|=10 same-type sequence via
+> `Algo1CuratorEnv.curate_and_advance`; the repo evolves position-to-position and
+> `r_task` is the paper's mean over positions 2..|G|. Path B (the single-step
+> probe stand-in) is no longer used. What REMAINS divergent is *how the groups are
+> built* — see **#0** (uniform distribution, no curriculum). The entry below is
+> kept for history.
 
 - **Paper §3.2.1:** Tasks grouped via soft-Jaccard over attribute annotations
   (topic, skills, concepts, strategies, pitfalls); within a group, repo
@@ -220,7 +267,14 @@ This is the biggest deviation. Worth splitting into two parts.
 
 ---
 
-## 11. Path B: transfer-probe `r_task` instead of paper's task-sequence average
+## 11. Path B: transfer-probe `r_task` — SUPERSEDED (now paper-aligned)
+
+> **Update 2026-06-26 — RESOLVED, no longer a divergence.** The result-producing
+> Algorithm 1 runs compute `r_task = mean executor success over positions 2..|G|`
+> over the real evolving sequence (`skillos/algo1/env.py`), exactly the paper's
+> formula — NOT the 2-probe Path B stand-in described below. The only residual
+> grouping divergence is **#0** (how groups are constructed), not how `r_task` is
+> computed. Entry kept for history.
 
 - **Paper §3.2.1 / Algorithm 1:** a training instance is a *sequence* of |G|
   related tasks; the repo evolves across tasks 1..N and
@@ -272,6 +326,15 @@ Mechanism (real but not prompt-fixable): the executor ignores ALFWorld's atomic
 timing out on composite verbs (Clean/Cool/Heat/Pick2). A one-line grammar hint
 did not move it at n=140 (+2.1pp, p=0.68).
 
+> **Update 2026-06-25 — decode RULED OUT, gap is 8B-specific.** A 4-config
+> executor-decode sweep (temp/top_p/top_k/reasoning, n=140 each) left the baseline
+> within noise of itself (all p>0.5); matching GiGPO's `top_p 1.0 / top_k off` is
+> *nominally worse* for Qwen3 (it fights the Qwen3 model card, whose thinking-mode
+> values 0.6/0.95/20 are already our default). Meanwhile the **32B executor
+> reproduces the paper's 54.5%** (we got 53.6%). Conclusion: harness is sound, the
+> 8B zero-shot baseline genuinely doesn't reach 47.9% — a reproducibility finding /
+> question for the authors. The lift is unaffected (measured vs this same baseline).
+
 **Important:** this is a baseline (no-memory) divergence and does **not** invalidate
 the curator result — the **+9.3pp ckpt30 lift is measured against this same
 baseline** and is real. The residual is either the canonical zero-shot Qwen3-8B
@@ -280,6 +343,18 @@ in the paper's GiGPO-deferred executor harness. Open question for the authors.
 NOTE: the knowledge entry `infsh/skillos-validated-executor-config` claims the
 baseline reproduces at 42.9% — that is a **mis-record of the ckpt30 with-memory
 number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-gap`.
+
+## 14. RL framework: TRL, not verl (confound in every run)
+
+- **Paper:** trains with **verl** (+ FSDP) on 16×H100.
+- **Ours:** **TRL 1.4** GRPOTrainer + DeepSpeed (ZeRO-3) + vLLM colocate on 8×H100.
+- **Why:** the codebase is built on TRL; a verl port is a large effort.
+- **Impact:** a genuine framework confound separate from LoRA-vs-FFT and the
+  grouping divergence (#0). Different GRPO loss plumbing, advantage normalization,
+  data sampler, and optimizer/sharding stack. This is a leading candidate (with
+  #0 and small effective batch) for the **bimodal trajectory** that the paper does
+  not report. Don't oversell repro fidelity — TRL ≠ verl is present in every run.
+- **Status:** `forced` (framework choice), flagged as a known confound.
 
 ## Open audit items (verify next time we touch them)
 
@@ -307,8 +382,9 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
 - [ ] Top-K skill retrieval = 5 — confirmed in `curator_env.py` (`top_k=5`)
 - [ ] `temperature=1.0` for curator generation — confirmed in configs
 - [ ] `learning_rate=1e-6` — confirmed in configs
-- [ ] `beta` (GRPO KL coefficient) — paper uses 0.001; v3 set 0.001; **Path B
-  config (`alfworld_8xh100_pathb.yaml`) sets `beta: 0.0`** (no KL term, drops the
-  reference model). Confirm whether this is intended or should match the paper.
+- [x] `beta` (GRPO KL coefficient) — **RESOLVED**: the active Algorithm 1 runs
+  (`algo1v8`, `algo1fft`) use `beta: 0.001` (paper value); ZeRO-3 shards the ref
+  model so it fits. The old `beta: 0.0` was a single-GPU/Path B memory mitigation,
+  now obsolete.
 - [ ] `steps_per_generation` defaults — TRL default = `gradient_accumulation_steps`;
   paper doesn't specify but this is the standard GRPO convention
