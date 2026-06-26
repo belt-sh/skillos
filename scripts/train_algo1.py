@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import random
 import sys
 
 import torch
@@ -54,7 +55,45 @@ def _has_vllm() -> bool:
 ALFWORLD_TASK_TYPES = ["pick", "clean", "heat", "cool", "look", "pick2"]
 
 
-def build_dataset(num_episodes: int, group_size: int) -> Dataset:
+def _assign_group_types(num_groups: int, distribution: str, seed: int) -> list[str]:
+    """Pick a task type for each of the `num_groups` training groups.
+
+    - "uniform" (default): round-robin over the 6 types — equal counts. The
+      original interpretive choice; the paper doesn't print frequencies.
+    - "natural": counts proportional to ALFWorld's real type frequencies
+      (DIVERGENCES #0). Frequencies come from the same one-time seed-bucket scan
+      the env uses (`_type_seeds` bucket sizes), so train matches the natural
+      distribution the held-out eval is drawn from. Deterministic per `seed`.
+    """
+    if distribution != "natural":
+        return [ALFWORLD_TASK_TYPES[i % len(ALFWORLD_TASK_TYPES)]
+                for i in range(num_groups)]
+
+    from skillos.envs import curator_env as _ce
+    if not _ce._type_seeds:
+        _ce._build_type_seed_index()
+    weights = {t: len(_ce._type_seeds.get(t, [])) for t in ALFWORLD_TASK_TYPES}
+    total = sum(weights.values()) or 1
+    counts = {t: round(num_groups * w / total) for t, w in weights.items()}
+    # Fix rounding drift against num_groups by nudging the largest buckets.
+    order = sorted(ALFWORLD_TASK_TYPES, key=lambda t: weights[t], reverse=True)
+    i = 0
+    while sum(counts.values()) != num_groups:
+        t = order[i % len(order)]
+        if sum(counts.values()) < num_groups:
+            counts[t] += 1
+        elif counts[t] > 0:
+            counts[t] -= 1
+        i += 1
+    types: list[str] = []
+    for t in ALFWORLD_TASK_TYPES:
+        types += [t] * counts[t]
+    random.Random(seed).shuffle(types)  # interleave so the data sampler doesn't see type-blocks
+    return types
+
+
+def build_dataset(num_episodes: int, group_size: int,
+                  type_distribution: str = "uniform", seed: int = 42) -> Dataset:
     """One row per GRPO *group* (paper: 3553 episodes / |G|=10 ≈ 355 groups),
     carrying explicit `group_id`/`task_type` columns. TRL repeats each row
     num_generations times and passes the row to `env.reset(**row)`, so all N
@@ -63,9 +102,8 @@ def build_dataset(num_episodes: int, group_size: int) -> Dataset:
     data, never from env-slot arithmetic (which collapses because TRL reuses
     env instances; see docs/postmortem-2026-06-10-algo1-group-collapse.md).
 
-    Task types round-robin over the six ALFWorld types so training covers
-    all of them (uniform by group, not split-proportional — an interpretive
-    choice; the paper groups "related" tasks without specifying frequencies).
+    `type_distribution` selects how the 6 ALFWorld types are spread over groups
+    (see _assign_group_types / DIVERGENCES #0).
     """
     from skillos.curator.prompts import CURATOR_SYSTEM
     num_groups = max(1, num_episodes // group_size)
@@ -77,8 +115,7 @@ def build_dataset(num_episodes: int, group_size: int) -> Dataset:
             ]
         ] * num_groups,
         "group_id": list(range(num_groups)),
-        "task_type": [ALFWORLD_TASK_TYPES[i % len(ALFWORLD_TASK_TYPES)]
-                      for i in range(num_groups)],
+        "task_type": _assign_group_types(num_groups, type_distribution, seed),
     })
 
 
@@ -177,7 +214,11 @@ def train(config: dict) -> None:
 
     grpo_kwargs["seed"] = config.get("seed", 42)
 
-    dataset = build_dataset(num_episodes, group_size)
+    dataset = build_dataset(
+        num_episodes, group_size,
+        type_distribution=config.get("group_type_distribution", "uniform"),
+        seed=config.get("seed", 42),
+    )
     args = GRPOConfig(**grpo_kwargs)
 
     peft_config = None

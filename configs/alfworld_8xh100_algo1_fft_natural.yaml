@@ -1,0 +1,89 @@
+# SkillOS ALFWorld training — 8x H100, PAPER ALGORITHM 1, FULL FINE-TUNE.
+# v8 recipe with LoRA → full fine-tuning, on the NOTES-VALIDATED sharding path.
+#
+# Purpose: test whether the bimodal-trajectory shape (ckpt30 peak, not the
+# paper's monotone-to-60) is a LoRA artifact. If FFT gives a monotone curve,
+# LoRA (or KL) caused it; if still bimodal, it's the TRL-vs-verl framework.
+#
+# SHARDING DECISION — ZeRO-3 + vLLM colocate (EMPIRICALLY validated THIS stack):
+#   Prior FFT losses (belt gotchas) + this session's findings:
+#     1. v6 ZeRO-2 + KL → OOM (params 16G replicated + ref 16G + vLLM 32G).
+#     2. FSDP FULL_SHARD/SHARD_GRAD_OP → generation WEDGE (GPUs pinned 100%).
+#     3. ZeRO-2 without vLLM → 25-50x slower, NCCL watchdog blew.
+#   The notes say "ZeRO-2 + vLLM colocate is validated" — but that is from an
+#   OLDER stack. On THIS stack (trl 1.4 / transformers 5.9 / deepspeed 0.19),
+#   ZeRO-2 + vLLM colocate HUNG: GPUs 0% util, 42 min no progress, first vLLM
+#   generation never produced tokens (2026-06-21). The ZeRO-3 + vLLM SMOKE, by
+#   contrast, WORKED: generation progressed (311 deadline cuts), step 1 closed,
+#   peak 65.5G/81.5G, no OOM, no wedge. So we use ZeRO-3 (the empirically
+#   working path here), which also SHARDS the ref model → beta=0.001 fits, so
+#   this is v8 EXACTLY minus LoRA (cleanest comparison).
+#   Residual risk: ZeRO-3 shards params → per-step vLLM weight-gather. Mitigation:
+#   watch the reward/KL trend over the first steps — sane movement confirms the
+#   weights sync (degenerate/flat reward = stale-weight bug, abort).
+#
+# Launch via ./run_algo1_fft.sh  (uses configs/accelerate_zero3.yaml).
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/alfworld-8xh100-algo1-fft-natural
+
+epochs: 1
+max_steps: 60                     # paper budget (Table 4)
+num_episodes: 3553                # paper training split (→ 355 groups of |G|=10)
+batch_size: 2                     # per device
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6             # paper's EXACT FFT rate (no LoRA 10× compensation)
+num_generations: 8                # paper GRPO group size N=8
+max_completion_length: 4096       # paper Max Response Length
+temperature: 1.0                  # paper rollout temperature
+beta: 0.001                       # paper Table 4 KL; ZeRO-3 shards the ref model
+                                  # so it fits (smoke-proven 65.5G). = v8 exactly.
+loss_type: grpo                   # paper GRPO loss
+lr_scheduler_type: constant       # paper lr held constant
+
+# Algorithm 1 specifics.
+group_size: 10                    # paper |G|=10 (Data Grouping Size)
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.3  # smoke-proven under ZeRO-3 (peak 65.5G/81.5G).
+
+use_lora: false                   # FULL fine-tune — the deviation under test
+
+enable_thinking: false
+
+# Frozen executor — REMOTE inference.sh (Qwen3-8B). Same as v8.
+executor:
+  type: infsh
+  app: openrouter/qwen3-8b
+  history_length: 3
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  max_tokens: 8192
+  context_size: 32768
+  reasoning_effort: medium
+
+# Content quality judge — REMOTE inference.sh (Qwen3-32B, paper).
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 5                     # full-state ZeRO-3 saves are ~16GB each; every
+                                  # 5 steps keeps disk sane (12 ckpts × ~16GB).
+save_total_limit: 12
+
+wandb_run_name: alfworld-8xh100-algo1-fft-natural
+
+# DIVERGENCES #0 test: assign group types by ALFWorld NATURAL frequencies
+# (proportional to _type_seeds bucket sizes) instead of uniform round-robin.
+# Everything else identical to algo1fft, so this isolates the grouping
+# distribution as the variable. Compare its trajectory shape vs seed-1 FFT.
+group_type_distribution: natural

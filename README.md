@@ -146,12 +146,33 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 - [x] Composite reward function (task + validity + quality + compression)
 - [x] Pluggable executor backends (heuristic / local / vLLM / API)
 - [x] Pluggable judge backends (heuristic / local / vLLM / API)
-- [x] Full training loop completing on 8×H100 (full fine-tune, vLLM colocate)
-- [x] Within-group transfer signal (Path B transfer-probe `r_task`) — fixes the
-  flat-lift root cause; see `JOURNAL.md` / `DIVERGENCES.md` #11
-- [ ] Paper's soft-Jaccard attribute grouping + evolving task sequence (§3.2.1)
-- [ ] Streaming-curation eval harness (required by Path B; see DIVERGENCES #12)
-- [ ] Match paper's ALFWorld results (target: 61.2% SR)
+- [x] Full training loop completing on 8×H100 (LoRA r=32 + full fine-tune, vLLM colocate)
+- [x] Full **Algorithm 1**: evolving |G|=10 task sequence (`curate_and_advance`),
+  `r_task = mean success over positions 2..|G|` — paper-faithful, supersedes Path B
+- [x] Streaming-curation eval harness + paired-by-gamefile McNemar (n=140)
+- [x] **Held-out lift confirmed**: LoRA +9.3pp (p=0.035), FFT +10.7pp (p=0.032)
+- [ ] Paper's soft-Jaccard attribute grouping + within-group curriculum (§3.2.1)
+- [ ] Match paper's ALFWorld results (target: 61.2% SR; current best ~44%)
+
+#### Active experiments & open questions (keep tracked)
+
+- [ ] **seed-2 FFT** (`algo1fftseed2`, running ~June 28) — does the bimodal
+  trajectory reproduce with RNG-shifted peak indices? Locks the "shape generalizes"
+  claim. → auto checkpoint-sweep on completion.
+- [ ] **Natural-distribution grouping** (DIVERGENCES #0, the top untested lever) —
+  config staged: `configs/alfworld_8xh100_algo1_fft_natural.yaml`
+  (`group_type_distribution: natural`). Launch after seed-2 frees the box.
+  Tests whether uniform-vs-natural type distribution drives the bimodality / lift
+  gap. Could flip the trajectory monotone or close part of the gap.
+- [ ] **Within-group curriculum** (easy→hard ordering, paper Table 5) — follow-up
+  if the distribution change alone doesn't stabilize the curve.
+- [ ] Baseline gap (~34% vs paper 47.9%) — **closed as 8B-specific** (decode +
+  precision + prompt + retrieval ruled out; 32B reproduces 54.5%). Open question
+  for the authors, not a bug. See `DIVERGENCES.md` #13.
+- [ ] Cross-executor transfer (8B-trained curator → 32B executor) — paper's
+  generalization claim, not yet reproduced.
+- [ ] Writeup: `docs/repro_report.md` (findings) + `docs/training_notes.md`
+  (engineering). Gate on multi-seed (above) + scope decision (ALFWorld-only vs +WebShop).
 
 ### v0.2 - Reasoning + Cross-Domain Transfer
 
