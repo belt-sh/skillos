@@ -15,6 +15,39 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Seed-2 FFT — does the bimodality reproduce? (2026-06-28)
+
+**YES, shape generalizes across seeds; peak index does not.** `algo1fftseed2`
+(seed=123, otherwise identical to the seed-1 FFT) completed 60/60. The 12-arm
+every-5 held-out McNemar sweep (valid_seen, n=140) vs the canonical baseline
+`output/eval-pathbv4/no_memory.jsonl` (33.6%):
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | **35** | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR | −2.9 | +0.7 | +5.7 | +1.4 | +1.4 | +4.3 | **+13.6** | +6.4 | +0.7 | +5.7 | +2.1 | +4.3 |
+| p | .52 | 1.0 | .26 | .85 | .85 | .36 | **.0026** | .14 | 1.0 | .18 | .71 | .33 |
+
+- Non-monotone/oscillating, same qualitative shape as seed-1 FFT (rise → dip →
+  mid-run peak → decline; ckpt60 lands below peak, never monotone-to-60).
+- **Peak shifted seed-1 step20 (+10.7pp) → seed-2 step35 (+13.6pp, p=0.0026)** —
+  stronger and more significant. Peak step indices are RNG-path-dependent (sweep
+  skill gotcha); the shape is the reproducible thing, not the index.
+- **Not a U-shape.** Worst arm is ckpt5 −2.9pp; nothing drops >10pp below
+  baseline, so the deep-trough `beta=0`/missing-KL signature does NOT apply here.
+- ckpt35 absolute 47.1% — Clean jumps to 63%, but Heat collapses to 6%
+  (per-type anti-correlation + the executor role-play issue, both known).
+- **Process gotcha:** the temp-0.6 no_memory baseline has ~8pp run-to-run
+  variance (a fresh reconstruction from the `eval-fft60-nomem-sh*` shards drew
+  41.4%, which inflated the reference and flipped every delta negative). Always
+  pair against the *fixed* canonical `eval-pathbv4/no_memory.jsonl`, never a
+  freshly re-run baseline. Valid comparison: `eval-fft-seed2/comparison_canonical.txt`.
+
+Conclusion: bimodality is a robust property of this small-batch GRPO + TRL setup,
+not a single-seed fluke. Next lever stays the grouping/probe distribution
+(DIVERGENCES #0, natural-distribution run staged), not more steps.
+
+---
+
 ## Current status (2026-06-21)
 
 - **Run:** `algo1v8lorakl` (wandb `okaris/skillos`), config
