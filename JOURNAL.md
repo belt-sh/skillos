@@ -15,6 +15,37 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Natural-distribution run — uniform grouping WINS (2026-07-03)
+
+**The DIVERGENCES #0 distribution test came back opposite to the hypothesis.**
+`algo1fftnatural` = seed-1 FFT recipe with one knob flipped: group types drawn
+from ALFWorld's natural frequencies (Pick-heavy) instead of uniform round-robin.
+12-arm sweep vs the canonical 33.6% baseline:
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR | +5.7 | +2.9 | +2.9 | −1.4 | +0.7 | +5.0 | −0.7 | +1.4 | −2.1 | −1.4 | −4.3 | −0.7 |
+
+No significant lift at ANY checkpoint (best p=0.20) — vs uniform's seed-1
++10.7pp (p=0.032) and seed-2 +13.6pp (p=0.0026). Three takeaways:
+
+1. **Uniform type exposure is load-bearing.** All large gains in the uniform
+   runs came from high-headroom types (Clean 19%→63% at seed-2 ckpt35); natural
+   shifts ~25% of training groups to Pick, the executor's most saturated type
+   (60% baseline). Distribution-matching the eval set is NOT the win — balanced
+   exposure to where the headroom lives is. Keep uniform.
+2. **The bimodality is NOT caused by the type distribution.** The natural curve
+   still oscillates, just inside the noise floor. Prime suspect is now the
+   TRL≠verl framework confound (#14) and/or the untested within-group curriculum.
+3. **Ops:** the sweep survived the 2026-07-02/03 OpenRouter thin-pool outage via
+   a self-healing supervisor (concurrency-matched probe gate: single+10+40-burst
+   ×2 consecutive; 4-arm waves; storm auto-abort keeping completed arms). 15
+   storms killed and re-gated; all 12 kept arms verified clean (140/140 games,
+   zero executor-failure markers). Lesson: **a single-probe pre-flight is
+   insufficient — the gate must match sweep-level concurrency.**
+
+---
+
 ## Seed-2 FFT — does the bimodality reproduce? (2026-06-28)
 
 **YES, shape generalizes across seeds; peak index does not.** `algo1fftseed2`

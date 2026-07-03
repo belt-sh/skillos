@@ -156,21 +156,21 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 
 #### Active experiments & open questions (keep tracked)
 
-- [ ] **seed-2 FFT** (`algo1fftseed2`, running ~June 28) — does the bimodal
-  trajectory reproduce with RNG-shifted peak indices? Locks the "shape generalizes"
-  claim. → auto checkpoint-sweep on completion.
-- [ ] **Natural-distribution grouping** (DIVERGENCES #0, the top untested lever) —
-  config staged: `configs/alfworld_8xh100_algo1_fft_natural.yaml`
-  (`group_type_distribution: natural`). Launch after seed-2 frees the box.
-  Tests whether uniform-vs-natural type distribution drives the bimodality / lift
-  gap. Could flip the trajectory monotone or close part of the gap.
-- [ ] **Within-group curriculum** (easy→hard ordering, paper Table 5) — follow-up
-  if the distribution change alone doesn't stabilize the curve.
+- [x] **seed-2 FFT** (`algo1fftseed2`) — **CONFIRMED 2026-06-28**: bimodal shape
+  reproduces; peak shifted step20→step35 (+13.6pp, p=0.0026). Shape generalizes
+  across seeds, peak indices don't.
+- [x] **Natural-distribution grouping** (DIVERGENCES #0) — **RESOLVED 2026-07-03,
+  uniform WINS**: natural-frequency training kills the lift (no arm significant,
+  best +5.7pp p=0.20) and does NOT flatten the oscillation. Balanced exposure to
+  high-headroom types (Clean/Cool/Heat) is load-bearing. Keep uniform round-robin.
+- [ ] **Within-group curriculum** (easy→hard ordering, paper Table 5) — now the
+  remaining untested half of #0; bimodality suspicion otherwise shifts to
+  TRL≠verl (#14).
+- [ ] **Cross-executor transfer** (8B-trained curator → 32B executor) — cheap
+  single sweep, paper's generalization claim, reuses existing checkpoints.
 - [ ] Baseline gap (~34% vs paper 47.9%) — **closed as 8B-specific** (decode +
   precision + prompt + retrieval ruled out; 32B reproduces 54.5%). Open question
   for the authors, not a bug. See `DIVERGENCES.md` #13.
-- [ ] Cross-executor transfer (8B-trained curator → 32B executor) — paper's
-  generalization claim, not yet reproduced.
 - [ ] Writeup: `docs/repro_report.md` (findings) + `docs/training_notes.md`
   (engineering). Gate on multi-seed (above) + scope decision (ALFWorld-only vs +WebShop).
 

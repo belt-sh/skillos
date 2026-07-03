@@ -27,7 +27,26 @@ Order matters: things at the top affect results most.
 
 ---
 
-## 0. Task grouping: uniform type distribution + no curriculum (UNTESTED — likely material)
+## 0. Task grouping: uniform type distribution + no curriculum (DISTRIBUTION TESTED 2026-07-03 — uniform WINS; curriculum still untested)
+
+> **Update 2026-07-03 — natural-distribution run resolves the distribution half,
+> in the OPPOSITE direction of the hypothesis.** `algo1fftnatural` (seed-1 FFT
+> recipe, only `group_type_distribution: natural` flipped) completed 60/60; the
+> 12-arm sweep vs the canonical 33.6% baseline shows **no significant lift at any
+> checkpoint** (best: ckpt5 +5.7pp p=0.20, ckpt30 +5.0pp p=0.21; late ckpts drift
+> negative) — vs uniform's seed-1 +10.7pp (p=0.032) and seed-2 +13.6pp (p=0.0026).
+> Natural-matching the training distribution **killed the lift** even though the
+> held-out eval IS naturally distributed. Reading: uniform over-sampling of
+> high-headroom types (Clean 19%/Cool 20%/Heat 25% baselines — where all big
+> gains come from, e.g. seed-2 ckpt35 Clean 19%→63%) is load-bearing; natural
+> shifts training budget to Pick (60% baseline, saturated). Also the trajectory
+> did NOT go monotone — it still oscillates, just inside the noise floor. So the
+> distribution divergence is **beneficial, keep uniform**; the bimodality driver
+> is NOT the type distribution → suspicion moves to #14 (TRL≠verl) and the
+> untested curriculum half below. Caveats: single run, one seed; sweep ran during
+> the 2026-07-02/03 OpenRouter thin-pool outage (all kept arms verified clean:
+> 140/140 games, zero executor-failure markers, no storm during final waves).
+> Sweep: `output/eval-fft-natural/comparison_canonical.txt`.
 
 This is the highest-priority open divergence because the paper's **Table 3
 ablation names grouping the single most impactful design choice** (removing it is
@@ -56,9 +75,8 @@ the largest drop, 61.2 → 57.3). We diverge in three ways:
   trajectory** (peak → collapse → recovery) and the residual lift gap. It also
   creates a **train(uniform)/eval(natural) mismatch** the paper doesn't have — the
   held-out eval *is* the natural distribution.
-- **Status:** `untested` — the cheapest high-value experiment available. First
-  test: switch type assignment to natural ALFWorld frequencies (a few lines), keep
-  everything else, and see whether the trajectory stabilizes.
+- **Status:** distribution half `tested — uniform wins, keep it` (2026-07-03,
+  see update above). Curriculum / soft-Jaccard half still `untested`.
 
 ## 1. ~~Single GPU~~ 8×H100, and ~~LoRA~~ full fine-tune (RESOLVED)
 
