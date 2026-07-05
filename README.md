@@ -166,8 +166,11 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
 - [ ] **Within-group curriculum** (easy→hard ordering, paper Table 5) — now the
   remaining untested half of #0; bimodality suspicion otherwise shifts to
   TRL≠verl (#14).
-- [ ] **Cross-executor transfer** (8B-trained curator → 32B executor) — cheap
-  single sweep, paper's generalization claim, reuses existing checkpoints.
+- [x] **Cross-executor transfer** (8B-trained curator → 32B executor) —
+  **CONFIRMED 2026-07-04**: v8-LoRA ckpt30 lifts the 32B executor +12.9pp
+  (p=0.0064), 62.1% absolute — above the paper's 61.2% headline. Transfer is
+  artifact-dependent (FFT curators transfer weakly/not at all; the 8B ranking
+  inverts).
 - [ ] Baseline gap (~34% vs paper 47.9%) — **closed as 8B-specific** (decode +
   precision + prompt + retrieval ruled out; 32B reproduces 54.5%). Open question
   for the authors, not a bug. See `DIVERGENCES.md` #13.

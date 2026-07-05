@@ -15,6 +15,42 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Cross-executor transfer — the generalization claim REPRODUCES (2026-07-04)
+
+**8B-trained curators driving the 32B executor** (`openrouter/qwen3-32b`,
+closed-loop streaming curation, 140 paired games, ref = fresh 32B no_memory
+baseline at 49.3%):
+
+| arm | abs SR | ΔSR | p |
+|---|---|---|---|
+| fft_s1_ckpt20 | 47.1% | −2.1pp | 0.74 |
+| fft_s2_ckpt35 | 55.0% | +5.7pp | 0.26 |
+| **v8lora_ckpt30** | **62.1%** | **+12.9pp** | **0.0064** |
+
+1. **The paper's cross-executor claim reproduces**: v8 LoRA ckpt30 lifts the 32B
+   executor +12.9pp (p=0.0064) — and 62.1% absolute **exceeds the paper's
+   headline SkillOS number (61.2%)**, achieved with a curator that never saw a
+   32B trajectory during training.
+2. **Transfer is artifact-dependent, and inverts the 8B ranking.** Best-on-8B
+   (fft_s2 ckpt35, +13.6pp on 8B) transfers only weakly (+5.7pp); fft_s1 ckpt20
+   (+10.7pp on 8B) doesn't transfer at all; v8 LoRA (+9.3pp on 8B, the *worst*
+   of the three on 8B) transfers best. Hypothesis: FFT curators overfit skills
+   to 8B executor quirks; LoRA's constrained update kept skills more generic.
+   Single run per arm — hypothesis, not established.
+3. **Heat unlocks at 32B**: 25% → 56–62% with memory. The 8B executor's
+   microwave role-play pathology is executor-specific and vanishes at 32B scale.
+4. Baseline variance again: this 32B no_memory draw is 49.3% vs 54.5% measured
+   earlier — consistent with the ~±4pp run-to-run variance of temp-0.6 baselines.
+   All arms in this table pair against the same fresh draw.
+5. **Ops postmortem:** results sat unread ~44h — the completion watcher polled
+   the supervisor log in `/tmp`, which the tmp-cleaner deleted mid-run. Rule:
+   supervisors must log to `logs/` (durable) and watchers must poll `output/`
+   artifacts, never `/tmp`.
+
+Artifacts: `output/eval-transfer-32b/` (JSONLs + `comparison.txt`).
+
+---
+
 ## Natural-distribution run — uniform grouping WINS (2026-07-03)
 
 **The DIVERGENCES #0 distribution test came back opposite to the hypothesis.**
