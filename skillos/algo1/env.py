@@ -36,6 +36,7 @@ from skillos.skills.repo import SkillRepo
 _instances: list["Algo1CuratorEnv"] = []
 _num_generations: int = 8     # paper N=8; overridden by configure()
 _group_size: int = 10         # paper |G|=10; overridden by configure()
+_curriculum: bool = False     # paper Table 5 easy->hard; overridden by configure()
 _batch_lock = threading.Lock()
 
 # Group-level task sequence registry: {group_id: [seed_int, ...] of length G}.
@@ -55,12 +56,14 @@ _executor_timeout_s: float = float(os.environ.get("SKILLOS_EXECUTOR_TIMEOUT_S", 
 _judge_timeout_s: float = float(os.environ.get("SKILLOS_JUDGE_TIMEOUT_S", "60"))
 
 
-def configure(*, judge_submit, num_generations: int, group_size: int) -> None:
+def configure(*, judge_submit, num_generations: int, group_size: int,
+              curriculum: bool = False) -> None:
     """Wire the env to a configured judge and pin the GRPO/G sizes."""
-    global _judge_submit, _num_generations, _group_size
+    global _judge_submit, _num_generations, _group_size, _curriculum
     _judge_submit = judge_submit
     _num_generations = num_generations
     _group_size = group_size
+    _curriculum = curriculum
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -351,7 +354,7 @@ class Algo1CuratorEnv:
         if not _classic._type_seeds:
             _classic._build_type_seed_index()
 
-        from skillos.algo1.data import sample_group_seeds
+        from skillos.algo1.data import gamefile_difficulty, sample_group_seeds
 
         class _SeedIndexAdapter:
             def seeds_for_type(self, t: str) -> list[int]:
@@ -365,7 +368,9 @@ class Algo1CuratorEnv:
             else:
                 self._task_seeds = sample_group_seeds(
                     group_id=gid, task_type=ttype, group_size=_group_size,
-                    seed_index=_SeedIndexAdapter())
+                    seed_index=_SeedIndexAdapter(), curriculum=_curriculum,
+                    difficulty=lambda s: gamefile_difficulty(
+                        _classic._seed_gamefiles.get(s, "")))
                 _group_sequences[gid] = list(self._task_seeds)
                 _group_types[gid] = ttype
         self._task_descriptions = [""] * _group_size

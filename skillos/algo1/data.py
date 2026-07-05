@@ -16,8 +16,48 @@ the same G task seeds so all N slots in a GRPO group walk an identical
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import random
-from typing import List
+from typing import Callable, List, Optional
+
+# Paper Table 5: within-group easy->hard curriculum applies the ascending step
+# with probability p_up = 0.80 (else a random remaining task), so groups are
+# mostly-sorted rather than strictly sorted.
+CURRICULUM_P_UP = 0.80
+
+_difficulty_cache: dict[str, int] = {}
+
+
+def gamefile_difficulty(gamefile: str) -> int:
+    """Expert-plan length (number of high-level PDDL subgoals) from the
+    traj_data.json next to the gamefile — our difficulty proxy for the paper's
+    easy->hard curriculum. Unknown/missing -> a middling constant so bad paths
+    neither sink nor float."""
+    if gamefile in _difficulty_cache:
+        return _difficulty_cache[gamefile]
+    d = 5
+    try:
+        with open(os.path.join(os.path.dirname(gamefile), "traj_data.json")) as f:
+            d = len(json.load(f)["plan"]["high_pddl"])
+    except Exception:
+        pass
+    _difficulty_cache[gamefile] = d
+    return d
+
+
+def order_easy_to_hard(seeds: List[int], difficulty: Callable[[int], int],
+                       rng: random.Random) -> List[int]:
+    """Soft easy->hard ordering: at each position take the easiest remaining
+    task with p=CURRICULUM_P_UP, else a random remaining one. Deterministic
+    given `rng` (which is keyed per group), so all N rollouts of a GRPO group
+    still share an identical sequence."""
+    remaining = sorted(seeds, key=difficulty)
+    out: List[int] = []
+    while remaining:
+        i = 0 if rng.random() < CURRICULUM_P_UP else rng.randrange(len(remaining))
+        out.append(remaining.pop(i))
+    return out
 
 
 def _stable_hash(s: str) -> int:
@@ -33,8 +73,15 @@ def sample_group_seeds(
     task_type: str,
     group_size: int,
     seed_index,
+    curriculum: bool = False,
+    difficulty: Optional[Callable[[int], int]] = None,
 ) -> List[int]:
-    """Return G seeds of the requested task_type, deterministic per group_id."""
+    """Return G seeds of the requested task_type, deterministic per group_id.
+
+    With `curriculum=True` (paper Table 5), the sampled seeds are re-ordered
+    soft easy->hard using `difficulty(seed)`. curriculum=False is byte-identical
+    to the pre-curriculum behavior.
+    """
     rng = random.Random(group_id * 1_000_003 + _stable_hash(task_type))
     pool = list(seed_index.seeds_for_type(task_type))
     if not pool:
@@ -43,8 +90,13 @@ def sample_group_seeds(
     # train split this only matters for rare types (Heat=16 seeds < 10? -
     # train pool is larger than the eval slice).
     if len(pool) >= group_size:
-        return rng.sample(pool, group_size)
-    out = list(pool)
-    while len(out) < group_size:
-        out.append(rng.choice(pool))
+        out = rng.sample(pool, group_size)
+    else:
+        out = list(pool)
+        while len(out) < group_size:
+            out.append(rng.choice(pool))
+    if curriculum:
+        if difficulty is None:
+            raise ValueError("curriculum=True requires a difficulty function")
+        out = order_easy_to_hard(out, difficulty, rng)
     return out

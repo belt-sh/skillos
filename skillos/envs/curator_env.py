@@ -127,6 +127,7 @@ _probe_env_total = 0
 # (read from the gamefile path). Probes then seed directly to a same-type game
 # — no slow rejection sampling, and reliable for rare types.
 _type_seeds: dict[str, list[int]] = {}
+_seed_gamefiles: dict[int, str] = {}  # seed -> gamefile path (same scan)
 _type_seed_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -649,6 +650,7 @@ def _build_type_seed_index(n: int = 400) -> None:
                     _, infos = env.reset()
                 gf = (infos.get("extra.gamefile") or [""])[0]
                 idx[_classify_gamefile(gf)].append(s)
+                _seed_gamefiles[s] = gf
         finally:
             _return_probe_env(env)
         _type_seeds = dict(idx)

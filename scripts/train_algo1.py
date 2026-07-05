@@ -152,6 +152,7 @@ def train(config: dict) -> None:
         judge_submit=classic_env._submit_judge,
         num_generations=num_generations,
         group_size=group_size,
+        curriculum=config.get("group_curriculum", False),
     )
 
     output_dir = config.get("output_dir", "./output/curator-algo1")
