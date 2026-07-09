@@ -15,6 +15,39 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Within-group curriculum — doesn't help either (2026-07-09)
+
+`algo1fftcurriculum` = seed-1 FFT recipe + soft easy→hard within-group ordering
+(paper Table 5, p↑=0.80, difficulty = expert-plan length from `traj_data.json`).
+Run **crashed at step 49/60** on 2026-07-08 07:05 UTC — OpenRouter's Alibaba
+provider hit us with a **429 storm (10,852 errors over the run's tail)**, every
+executor call in step 49 exhausted its 2 resubmissions, `DEADLINE CUT` masked
+100% of that step's r_task, ranks diverged, process silently exited. Not our
+code, not OOM, not NCCL. Checkpoints 5–45 saved; 50–60 lost.
+
+Rather than a 3-day resume, swept the 9 checkpoints we had against the canonical
+33.6% baseline (uniform runs peaked at ckpt20 and ckpt35 — the peak-region is
+inside 5–45):
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 |
+|---|---|---|---|---|---|---|---|---|---|
+| ΔSR | +0.0 | −0.7 | −5.7 | +2.1 | +4.3 | +2.9 | −3.6 | +0.7 | +4.3 |
+| p | 1.0 | 1.0 | .13 | .72 | .38 | .58 | .46 | 1.0 | .36 |
+
+**No significant lift at any checkpoint** (best p=0.36). Flat, oscillating inside
+noise — same shape as `natural`. Uniform peaks land inside this window in both
+prior seeds, so a hidden curriculum peak in 50–60 is very unlikely; not resuming.
+
+**With both distribution AND ordering falsified, DIVERGENCES #0 is fully closed:
+grouping is NOT the driver of our bimodal trajectory or lift gap.** The only
+surviving suspect is **TRL ≠ verl (#14)** — the framework confound present in
+every run. This is a real writeup conclusion: reproduces qualitatively,
+trajectory shape is framework-dependent, not a grouping-recipe artifact.
+
+Artifacts: `output/eval-fft-curriculum/comparison_canonical.txt`.
+
+---
+
 ## Cross-executor transfer — the generalization claim REPRODUCES (2026-07-04)
 
 **8B-trained curators driving the 32B executor** (`openrouter/qwen3-32b`,

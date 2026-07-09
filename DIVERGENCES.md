@@ -27,7 +27,20 @@ Order matters: things at the top affect results most.
 
 ---
 
-## 0. Task grouping: uniform type distribution + no curriculum (DISTRIBUTION TESTED 2026-07-03 — uniform WINS; curriculum still untested)
+## 0. Task grouping: uniform type distribution + no curriculum (BOTH HALVES RESOLVED — grouping is NOT the bimodality driver)
+
+> **Update 2026-07-09 — curriculum half also falsified.** `algo1fftcurriculum`
+> (seed-1 FFT recipe + soft easy→hard within-group ordering, paper Table 5,
+> p↑=0.80, difficulty = expert-plan length) crashed at step 49/60 in an
+> OpenRouter 429 storm; we swept the surviving ckpts 5–45 (the peak-region for
+> both prior seeds) against the canonical 33.6% baseline. **No significant lift
+> at any checkpoint** (best +4.3pp p=0.36, best n.s.), flat oscillation inside
+> noise — same signature as the natural run. Uniform seeds peaked at ckpt20 and
+> ckpt35 (inside this window) so a hidden curriculum peak in 50–60 is very
+> unlikely; not resuming. **With distribution AND ordering both falsified,
+> grouping is fully exonerated as the driver of our bimodal trajectory or lift
+> gap. The only surviving suspect is TRL ≠ verl (#14).** Sweep artifacts:
+> `output/eval-fft-curriculum/comparison_canonical.txt`.
 
 > **Update 2026-07-03 — natural-distribution run resolves the distribution half,
 > in the OPPOSITE direction of the hypothesis.** `algo1fftnatural` (seed-1 FFT
@@ -75,8 +88,10 @@ the largest drop, 61.2 → 57.3). We diverge in three ways:
   trajectory** (peak → collapse → recovery) and the residual lift gap. It also
   creates a **train(uniform)/eval(natural) mismatch** the paper doesn't have — the
   held-out eval *is* the natural distribution.
-- **Status:** distribution half `tested — uniform wins, keep it` (2026-07-03,
-  see update above). Curriculum / soft-Jaccard half still `untested`.
+- **Status:** distribution half `tested — uniform wins, keep it` (2026-07-03);
+  curriculum half `tested — no lift, grouping fully exonerated` (2026-07-09).
+  Only the soft-Jaccard *dependency-gated seeding* remains untested and is
+  probably not worth the engineering given both other #0 knobs came back null.
 
 ## 1. ~~Single GPU~~ 8×H100, and ~~LoRA~~ full fine-tune (RESOLVED)
 

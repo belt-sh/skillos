@@ -163,9 +163,11 @@ Reproduce the paper's core result: an RL-trained 8B curator that manages a skill
   uniform WINS**: natural-frequency training kills the lift (no arm significant,
   best +5.7pp p=0.20) and does NOT flatten the oscillation. Balanced exposure to
   high-headroom types (Clean/Cool/Heat) is load-bearing. Keep uniform round-robin.
-- [ ] **Within-group curriculum** (easy→hard ordering, paper Table 5) — now the
-  remaining untested half of #0; bimodality suspicion otherwise shifts to
-  TRL≠verl (#14).
+- [x] **Within-group curriculum** (easy→hard ordering, paper Table 5) —
+  **RESOLVED 2026-07-09, no lift**: no arm significant (best +4.3pp p=0.36),
+  flat oscillation, same signature as `natural`. With BOTH halves of #0 now
+  falsified, grouping is fully exonerated as the bimodality driver; TRL≠verl
+  (#14) is the last remaining suspect.
 - [x] **Cross-executor transfer** (8B-trained curator → 32B executor) —
   **CONFIRMED 2026-07-04**: v8-LoRA ckpt30 lifts the 32B executor +12.9pp
   (p=0.0064), 62.1% absolute — above the paper's 61.2% headline. Transfer is
