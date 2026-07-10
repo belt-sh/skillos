@@ -15,6 +15,36 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Reasoning baseline reproduces on first shot — 8B gap is ALFWorld-specific (2026-07-10)
+
+Built the reasoning eval harness (`skillos/reasoning/{datasets,prompts,grading}.py` +
+`scripts/eval_reasoning.py`, no_memory + closed_loop modes) while seed-3 trains.
+First AIME24 + AIME25 no_memory run through the same `openrouter/qwen3-8b`
+executor as ALFWorld:
+
+| dataset | ours (no_memory) | paper (Qwen3-8B no_memory) | delta |
+|---|---|---|---|
+| AIME24 | 22/30 = 73.3% | 76.0±6.9 | −2.7pp (within 1σ) |
+| AIME25 | 18/30 = 60.0% | 71.1±10.7 | −11.1pp (~1σ) |
+| **AIME avg** | **66.7%** | **73.6** | **−6.9pp** |
+
+**Significance:** we reproduce the paper's no_memory reasoning baseline **within
+noise on first attempt** using the same executor that is 14pp below the paper on
+ALFWorld (33.6% vs 47.9%). That triangulates the baseline gap — it is not a
+general executor mismatch; it is specific to the ALFWorld env / ReAct
+interaction. Confirms the earlier `executor-atomic-verb-gap` diagnosis on
+independent data. 1/60 problems errored (provider blip); rest graded cleanly.
+
+GPQA-Diamond is blocked pending `huggingface-cli login` (the gated
+`Idavidrein/gpqa` has the MC options; the open mirror strips them). Closed-loop
+reasoning eval is stubbed — needs local GPU for the curator, which is currently
+seed-3's until ~Jul 13. Cross-domain transfer test (our best ALFWorld
+curator → reasoning) queued for then.
+
+Artifacts: `output/eval-reasoning/nomem_aime.jsonl`.
+
+---
+
 ## Within-group curriculum — doesn't help either (2026-07-09)
 
 `algo1fftcurriculum` = seed-1 FFT recipe + soft easy→hard within-group ordering
