@@ -27,8 +27,19 @@ REASONING_USER_TEMPLATE = (
 )
 
 
+REASONING_SYSTEM_GPQA_FT = (
+    "You are a scientific expert. Read the question and reason step by step. "
+    "Give the exact answer (e.g. a value with units, a compound name, or a "
+    "short phrase). Put your final answer inside \\boxed{...}."
+)
+
+
 def build_messages(problem: str, past_skills: str, kind: str) -> list[dict]:
-    system = REASONING_SYSTEM_AIME if kind == "aime" else REASONING_SYSTEM_GPQA
+    system = (
+        REASONING_SYSTEM_AIME if kind == "aime"
+        else REASONING_SYSTEM_GPQA_FT if kind == "gpqa_ft"
+        else REASONING_SYSTEM_GPQA
+    )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": REASONING_USER_TEMPLATE.format(

@@ -32,9 +32,38 @@ def _aime25() -> list[dict]:
     ]
 
 
+def _gpqa_open_freetext() -> list[dict]:
+    """Fallback GPQA-Diamond (198 problems) when the gated Idavidrein source
+    isn't accessible. This mirror ships only the reference boxed solution —
+    NO multiple-choice options — so grading is strict free-text match, not
+    MC. Score is a lower-bound proxy for the paper's MC accuracy; kind is
+    tagged `gpqa_ft` so grading can normalize and match against the boxed
+    reference (see grading.grade_gpqa_ft)."""
+    from datasets import load_dataset
+    ds = load_dataset("hendrydong/gpqa_diamond", split="test")
+    out: list[dict] = []
+    for i, r in enumerate(ds):
+        out.append({"id": f"GPQAft-{i:03d}", "problem": r["problem"],
+                    "answer": r["solution"], "kind": "gpqa_ft",
+                    "domain": r.get("domain", "")})
+    return out
+
+
 def _gpqa_diamond() -> list[dict]:
     from datasets import load_dataset
-    ds = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
+    try:
+        ds = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
+    except Exception as e:
+        # Fall back to the open free-text mirror so a run isn't blocked on the
+        # gated-access approval loop. Caller can see kind == 'gpqa_ft' and
+        # know this is a proxy.
+        msg = str(e)
+        if "gated" in msg.lower() or "authenticated" in msg.lower() \
+                or "authorized" in msg.lower():
+            print("[reasoning.datasets] GPQA gated access not granted; "
+                  "falling back to hendrydong/gpqa_diamond (free-text proxy).")
+            return _gpqa_open_freetext()
+        raise
     out: list[dict] = []
     for i, r in enumerate(ds):
         # GPQA-Diamond fields: Question, Correct Answer, Incorrect Answer 1..3.

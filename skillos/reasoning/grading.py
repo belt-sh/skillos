@@ -37,7 +37,28 @@ def extract_gpqa(response: str) -> str | None:
     return _last(_LETTER_RE, response)
 
 
+def _norm_freetext(s: str) -> str:
+    """Aggressive normalization for GPQA free-text: strip whitespace, unit
+    formatting, LaTeX cruft, and case. Compare canonical forms."""
+    s = s.strip().lower()
+    for tok in ["\\text{", "\\mathrm{", "}", "{", "$", "\\,", "\\ ", "\\;"]:
+        s = s.replace(tok, "")
+    s = s.replace("×", "*").replace("−", "-").replace("–", "-")
+    # strip ALL whitespace — units and formatting vary ("2.5 nm" vs "2.5nm")
+    return "".join(s.split())
+
+
+def extract_gpqa_ft(response: str) -> str | None:
+    return _last(_BOX_RE, response)
+
+
 def grade(response: str, gold: str, kind: str) -> tuple[bool, str | None]:
+    if kind == "gpqa_ft":
+        pred = extract_gpqa_ft(response)
+        if pred is None:
+            return False, None
+        gold_box = _last(_BOX_RE, gold) or gold
+        return _norm_freetext(pred) == _norm_freetext(gold_box), pred
     pred = extract_aime(response) if kind == "aime" else extract_gpqa(response)
     if pred is None:
         return False, None
