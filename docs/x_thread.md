@@ -1,6 +1,6 @@
 # SkillOS: What's behind the "8B curator beats Gemini-2.5-Pro" claim?
 
-**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. But two findings don't match the paper: the training curve is bimodal instead of monotone (reproducible across two seeds), and the ALFWorld no-memory baseline sits 14pp below the paper on the same executor that reproduces the reasoning baseline within 1σ. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
+**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. But two findings don't match the paper: the training curve is non-monotone-with-post-peak-regression (reproducible across three seeds, peak indices at ckpt 20 / 35 / 55), and the ALFWorld no-memory baseline sits 14pp below the paper on the same executor that reproduces the reasoning baseline within 1σ. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
 
 The article is easier to read on GitHub: [github.com/belt-sh/skillos](https://github.com/belt-sh/skillos)
 
@@ -33,7 +33,7 @@ The setup is clean:
 
 The idea is that after training, the curator has learned to write skills that are *actually useful to this particular executor on this particular kind of task* — even if the individual skill markdown looks anodyne to a human. The whole loop is executor-grounded: reward comes from downstream task success, not from a proxy signal.
 
-Reasonable expectation: if the method works, we should see (a) held-out task lift, (b) monotone training curves as reward climbs, and (c) the trained curator transferring to executors it never saw during training.
+Reasonable expectation: if the method works, we should see (a) held-out task lift, (b) monotone training curves as reward climbs to a stable optimum, and (c) the trained curator transferring to executors it never saw during training.
 
 Let's take those one at a time.
 
@@ -67,18 +67,23 @@ The important part is that this generalisation direction is real. It's not a tra
 
 **The surprising twist:** the ranking inverts. The FFT curators that outperform on 8B held-out eval transfer worst on 32B. The LoRA curator that ranked third on 8B transfers best on 32B. My reading is that FFT skills overfit to specific 8B executor quirks — the "how this particular model likes its skills phrased" surface — while LoRA's constrained update produces more generic skills that survive an executor swap. Single run per arm, so hypothesis, not established. Worth its own follow-up.
 
-## The bad news: the training curve is bimodal, not monotone
+## The bad news: the training curve is non-monotone and peak indices are wild
 
 The paper reports monotone-to-60 training curves — reward climbs, held-out lift climbs, ship checkpoint-60. Our curves look nothing like that.
 
-We ran two independent 60-step FFT runs with different seeds, everything else identical. Then we swept every saved checkpoint (5-step cadence) through paired-by-gamefile McNemar against a fixed 33.6% no-memory baseline.
+We ran three independent 60-step FFT runs with different seeds, everything else identical. Then we swept every saved checkpoint (5-step cadence) through paired-by-gamefile McNemar against a fixed 33.6% no-memory baseline.
 
 | run | peak ckpt | peak lift | p | ckpt60 lift |
 |---|---|---|---|---|
 | FFT seed-1 (seed=42) | 20 | +10.7pp | 0.032 | +5.7pp |
 | FFT seed-2 (seed=123) | 35 | +13.6pp | 0.0026 | +4.3pp |
+| FFT seed-3 (seed=456) | 55 | +11.4pp | 0.011 | +3.6pp |
 
-Peak mid-run, then decline. Peak index moves — 20 vs 35 across seeds — but the shape holds. If you follow the "ship checkpoint-60" rule the paper implies, you leave 6–9pp on the table on both seeds.
+Three independent runs. Three significant peaks. Peak indices span **ckpt 20, 35, and 55** — half the training run. ckpt60 lands 4–9pp below the peak on every seed. If you follow the "ship checkpoint-60" rule the paper implies, you leave meaningful lift on the table on every seed.
+
+I want to be precise about what actually reproduces across N=3, because "bimodal" in the strict "two peaks with a clear trough between" sense doesn't fit seed-3 — it's a late-peaking curve with post-peak regression, not a two-peak shape. What does robustly hold across all three seeds is: statistically significant lift somewhere in the run, peak at ckpt < 60, ckpt60 materially below peak, peak lift in the +10 to +14pp band. The name for that is **non-monotone-with-post-peak-regression**, not necessarily bimodal.
+
+The practical consequence is the same either way. **Ship best-of-heldout from a sweep, not `checkpoint-60`.**
 
 This is a real reproducibility finding, not a bug in our stack. The natural next question is *why*. The paper's own ablation says grouping is the single most impactful design lever, so I spent the next month burning training runs on the two halves of that grouping recipe.
 

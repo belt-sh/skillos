@@ -15,6 +15,57 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Seed-3 FFT completes — non-monotone shape confirmed across N=3, peak indices wild (2026-07-14)
+
+`algo1fftseed3` (seed=456, otherwise identical to seed-1/seed-2) completed 60/60
+on 2026-07-13 18:55 UTC. 12-arm every-5 sweep vs canonical 33.6% baseline:
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR | −2.1 | +2.9 | −0.7 | −2.9 | +6.4 | +2.1 | −5.0 | +7.9 | +8.6 | +5.7 | **+11.4** | +3.6 |
+| p | .68 | .54 | 1.0 | .56 | .14 | .69 | .17 | .06 | .08 | .17 | **.011** | .47 |
+
+**Peak at ckpt55, +11.4pp, p=0.011.** Third significant peak in a row.
+
+**Peak indices across N=3 span ckpt20 → ckpt55 — half the training run.**
+
+| seed | peak ckpt | peak lift | p | ckpt60 lift |
+|---|---|---|---|---|
+| seed-1 (42) | 20 | +10.7pp | 0.032 | +5.7pp |
+| seed-2 (123) | 35 | +13.6pp | 0.0026 | +4.3pp |
+| seed-3 (456) | 55 | +11.4pp | 0.011 | +3.6pp |
+
+Robust across all 3 seeds:
+1. Statistically significant lift somewhere in the run.
+2. Peak at ckpt < 60.
+3. ckpt60 lands 4-9pp below peak.
+4. Peak lift in the +10 to +14pp band.
+
+**Not robust:** peak location (huge variance), and the strict "bimodal / two
+peaks with clear trough" shape. Seed-3 is more "noise-with-slight-drift through
+ckpt35, then late rise → peak → regress at 60" — a late-peaking curve, not a
+classic bimodal. Seed-1 and seed-2 have the mid-run peak + regress pattern.
+
+**Practical claim:** the trajectory is **non-monotone**, peak indices are wildly
+RNG-dependent, ship best-of-heldout from the sweep. Not "bimodal" universally —
+that's a seed-1/seed-2 property. Ship rule and reproducibility finding stand;
+the specific shape descriptor tightens.
+
+Per-type quirks worth noting for seed-3:
+- Heat: peak 8/16=50% at ckpt45, then collapses to 1/16=6% at ckpt55. Heat is
+  extremely volatile across ckpts (all three seeds).
+- Cool: peak 13/25=52% at ckpt55, driving much of the peak lift.
+- Pick: stable 60-77% across all ckpts (baseline is 60%, so most gains are in
+  the compound-verb types where headroom exists).
+
+Bimodality driver hypothesis unchanged: TRL ≠ verl (DIVERGENCES #14) is the
+last surviving suspect. Grouping (both halves) tested and null. Not doing the
+verl port here.
+
+Artifacts: `output/eval-fft-seed3/comparison_canonical.txt`.
+
+---
+
 ## Reasoning baseline reproduces — 8B gap is ALFWorld-specific (2026-07-10 → 07-11)
 
 Built the reasoning eval harness (`skillos/reasoning/{datasets,prompts,grading}.py` +

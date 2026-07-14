@@ -43,17 +43,19 @@ Above the paper's headline on this single run. Baseline stochasticity is ~±4pp,
 
 The −14pp baseline gap is **environment-specific**: same executor reproduces the paper on reasoning within noise, so the ALFWorld gap is the ReAct/atomic-verb interaction, not model quality. Details: [`DIVERGENCES.md`](DIVERGENCES.md) #13, gotcha `executor-atomic-verb-gap`.
 
-## Training trajectory is bimodal on TRL, not monotone
+## Training trajectory is non-monotone on TRL, peak indices are wild
 
 Held-out lift over 60 training steps, sweep vs canonical 33.6% baseline:
 
-| run | peak ckpt | peak lift | p |
-|---|---|---|---|
-| seed-1 FFT | ckpt20 | +10.7pp | 0.032 |
-| seed-2 FFT (seed=123) | ckpt35 | +13.6pp | 0.0026 |
-| seed-3 FFT (seed=456) | *training as of 2026-07-12* | — | — |
+| run | peak ckpt | peak lift | p | ckpt60 lift |
+|---|---|---|---|---|
+| seed-1 FFT (seed=42)  | 20 | +10.7pp | 0.032 | +5.7pp |
+| seed-2 FFT (seed=123) | 35 | +13.6pp | 0.0026 | +4.3pp |
+| seed-3 FFT (seed=456) | **55** | **+11.4pp** | **0.011** | +3.6pp |
 
-Peak index is RNG-dependent, shape holds. The paper reports monotone-to-60. Systematically falsified as causes of the shape: uniform vs natural type distribution, easy→hard within-group curriculum (both halves of DIVERGENCES #0). Only surviving suspect: TRL vs verl (advantage normalisation, sampling, buffer semantics). See gotcha `fft-bimodal-not-lora`.
+Three independent runs, three significant peaks, peak indices spread across half the training run (ckpt 20 → ckpt 55). ckpt60 sits materially below the peak on every seed. The paper reports monotone-to-60; we observe non-monotone-with-post-peak-regression on every seed we've run. Ship best-of-heldout from a sweep, not `checkpoint-60`.
+
+Systematically falsified as causes of the shape: uniform vs natural type distribution, easy→hard within-group curriculum (both halves of DIVERGENCES #0). Only surviving suspect: TRL vs verl (advantage normalisation, sampling, buffer semantics). See gotcha `fft-bimodal-not-lora`.
 
 ## Quick start
 
@@ -145,16 +147,17 @@ legacy/                  # superseded launchers and configs, kept for provenance
 
 Confirmed:
 - Algorithm 1 with paper-faithful reward composition, executor/judge/decoder settings
-- Held-out lift, ALFWorld: LoRA +9.3pp (p=0.035), FFT seed-1 +10.7pp (p=0.032), seed-2 +13.6pp (p=0.0026)
+- Held-out lift, ALFWorld: LoRA +9.3pp (p=0.035), FFT seed-1 +10.7pp (p=0.032), seed-2 +13.6pp (p=0.0026), seed-3 +11.4pp (p=0.011)
+- **Non-monotone trajectory reproduced N=3**: peak indices at ckpt20/35/55, ckpt60 4-9pp below peak on every seed. Cause narrowed to TRL vs verl framework difference (DIVERGENCES #14)
 - Cross-executor transfer: 8B-trained LoRA curator lifts 32B executor +12.9pp (p=0.0064), 62.1% absolute
 - Reasoning baseline reproduces paper within 1.1σ on average across AIME24/25 + GPQA-D
 - ALFWorld baseline gap is env-specific (same executor matches paper on reasoning)
 
 Open:
-- Bimodal trajectory: n=3 in progress. Cause narrowed to TRL vs verl framework difference
-- Closed-loop reasoning eval (curator inference blocked on GPUs currently held by seed-3)
+- Closed-loop reasoning eval (needs curator inference on freshly-freed GPUs)
 - WebShop untouched
-- Reasoning-trained curator (paper's headline generalisation direction)
+- Reasoning-trained curator (paper's headline cross-domain generalisation direction)
+- TRL → verl port (only way to test the framework hypothesis directly)
 
 ## Hardware
 
