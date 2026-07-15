@@ -72,6 +72,34 @@ is a seed-3 quirk or a general property.
 
 Artifacts: `output/eval-reasoning-transfer/`, `output/eval-transfer-32b-seed3/`.
 
+### 3. Seed-2 32B transfer sweep replicates the decorrelation (2026-07-15)
+
+12-arm every-5 32B transfer sweep on seed-2 checkpoints (`output/eval-transfer-32b-seed2/comparison.txt`), same canonical 49.3% baseline:
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR (32B) | +7.1 | +7.9 | −2.1 | +1.4 | +7.9 | +7.9 | −4.3 | +6.4 | +7.9 | +0.0 | +7.1 | **+8.6** |
+| p (32B) | .13 | .052 | .74 | .87 | .089 | .080 | .36 | .15 | .090 | 1.0 | .15 | .058 |
+| ΔSR on 8B | −2.9 | −0.7 | +2.9 | +1.4 | +1.4 | +4.3 | **+13.6** | +6.4 | +4.3 | +5.7 | +2.1 | +4.3 |
+
+**Seed-2's on-8B peak (ckpt35 +13.6pp p=0.003) transfers NEGATIVELY on 32B (−4.3pp).** No single dominant 32B peak — five ckpts (10, 25, 30, 45, 60) all cluster at ~+7-9pp with the highest at ckpt60 (+8.6pp, borderline p=0.058).
+
+Two-seed replication of the 8B/32B decorrelation:
+- Both seeds: on-8B peak transfers poorly on 32B (seed-3 +2.1pp n.s., seed-2 −4.3pp).
+- Both seeds: early ckpts (5-10) transfer significantly or near-significantly.
+- Different distribution: seed-3 has one sharp 32B peak at ckpt5; seed-2 has broad ~+8pp plateau across multiple ckpts.
+
+The decorrelation is a real cross-seed property, not a seed-3 quirk. Ship best-on-target-executor from a sweep, not best-on-training-executor. Artifacts: `output/eval-transfer-32b-seed2/`.
+
+### 4. Reasoning curator training LAUNCHED (2026-07-15 22:25 UTC)
+
+`reasoningfft` — closes the last missing training arm of the paper repro. Built out of:
+- `skillos/reasoning/train_data.py` — DeepMath-103K topic-grouped seed index (9 buckets, 103k problems).
+- `skillos/reasoning/env.py` — `ReasoningCuratorEnv(Algo1CuratorEnv)` overriding only `_ensure_group_sequence` (DeepMath indices) and `_run_executor_at` (single-turn CoT executor via inference.sh + boxed-answer grading). All Algorithm 1 machinery inherits.
+- `scripts/train_reasoning.py`, `configs/reasoning_8xh100_algo1_fft.yaml`, `run_reasoning_fft.sh` — same recipe as ALFWorld FFT (60 steps, |G|=10, ZeRO-3, beta=0.001, seed=42, Qwen3-32B judge).
+
+Expected wall: ~3 days per the paper's "reasoning ~2.5 days on 16 H100". On completion: eval on AIME24+25 + GPQA-D + ALFWorld valid_seen. The ALFWorld eval tests the paper's headline **cross-domain +13.3pp** claim in the reasoning→ALFWorld direction — the strongest generalisation result in the paper.
+
 ---
 
 ## Seed-3 FFT completes — non-monotone shape confirmed across N=3, peak indices wild (2026-07-14)

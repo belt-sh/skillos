@@ -1,0 +1,53 @@
+# SkillOS Reasoning training — 8x H100, PAPER ALGORITHM 1, FULL FINE-TUNE.
+# DeepMath-103K same-topic groups (paper §4.1). Same ZeRO-3 + vLLM colocate
+# sharding as the ALFWorld FFT run; only the env differs.
+#
+# Launch via ./run_reasoning_fft.sh (uses configs/accelerate_zero3.yaml).
+
+model: Qwen/Qwen3-8B
+output_dir: ./output/reasoning-8xh100-algo1-fft
+
+epochs: 1
+max_steps: 60                     # paper Table 4 (reasoning ~2.5 days on 16 H100)
+num_episodes: 3550                # ~355 groups × |G|=10, same shape as ALFWorld
+batch_size: 2
+gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+learning_rate: 1.0e-6
+num_generations: 8
+max_completion_length: 4096
+temperature: 1.0
+beta: 0.001                       # paper Table 4 KL
+loss_type: grpo
+lr_scheduler_type: constant
+
+group_size: 10
+
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.3
+
+use_lora: false                   # FFT recipe, same as ALFWorld run
+
+enable_thinking: false
+
+# Reasoning executor app on inference.sh — Qwen3-8B, single-turn CoT.
+executor_app: openrouter/qwen3-8b
+
+# Content quality judge — same Qwen3-32B as ALFWorld.
+judge:
+  type: infsh
+  app: openrouter/qwen3-32b
+  temperature: 0.0
+  max_tokens: 256
+  context_size: 8192
+
+logging_steps: 1
+report_to: wandb
+
+save_strategy: steps
+save_steps: 5
+save_total_limit: 12
+
+wandb_run_name: reasoning-8xh100-algo1-fft
+
+seed: 42
