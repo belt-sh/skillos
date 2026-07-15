@@ -149,15 +149,20 @@ Confirmed:
 - Algorithm 1 with paper-faithful reward composition, executor/judge/decoder settings
 - Held-out lift, ALFWorld: LoRA +9.3pp (p=0.035), FFT seed-1 +10.7pp (p=0.032), seed-2 +13.6pp (p=0.0026), seed-3 +11.4pp (p=0.011)
 - **Non-monotone trajectory reproduced N=3**: peak indices at ckpt20/35/55, ckpt60 4-9pp below peak on every seed. Cause narrowed to TRL vs verl framework difference (DIVERGENCES #14)
-- Cross-executor transfer: 8B-trained LoRA curator lifts 32B executor +12.9pp (p=0.0064), 62.1% absolute
+- Cross-executor transfer at parity: 8B-trained LoRA curator lifts 32B executor +12.9pp (p=0.0064), 62.1% absolute
+- **8B ranking is decorrelated from 32B transfer** (seed-3 every-5 sweep): 32B peak at ckpt5 (+13.6pp p=0.004), 8B peak at ckpt55 (+11.4pp p=0.011). Early curators transfer better than late ones on the executor swap.
 - Reasoning baseline reproduces paper within 1.1σ on average across AIME24/25 + GPQA-D
 - ALFWorld baseline gap is env-specific (same executor matches paper on reasoning)
 
+Suggestive (directional, underpowered):
+- **ALFWorld-curator → reasoning transfer is asymmetric**: fft-seed2 ckpt35 +6.7pp on AIME24+25, fft-seed3 ckpt55 −8.3pp, v8-lora ckpt30 −1.7pp. All n=60, all p > 0.2 — needs higher-n to establish.
+
 Open:
-- Closed-loop reasoning eval (needs curator inference on freshly-freed GPUs)
 - WebShop untouched
 - Reasoning-trained curator (paper's headline cross-domain generalisation direction)
 - TRL → verl port (only way to test the framework hypothesis directly)
+- Higher-n cross-domain reasoning transfer (n=60 is directional, not established)
+- 32B transfer sweep on seed-2 (does the 8B/32B decorrelation replicate?)
 
 ## Hardware
 

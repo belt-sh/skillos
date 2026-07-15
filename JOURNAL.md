@@ -15,6 +15,65 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## Cross-domain reasoning transfer + expanded 32B seed-3 sweep (2026-07-15)
+
+Two experiments queued after seed-3 sweep freed the box. Both surprising.
+
+### 1. ALFWorld-curator → reasoning transfer is asymmetric across curators
+
+Closed-loop AIME24+25 (60 problems each arm, McNemar-paired vs the no-memory
+run):
+
+| curator (ALFWorld-trained) | AIME24 | AIME25 | overall | ΔSR | McNemar p |
+|---|---|---|---|---|---|
+| no memory (reference) | 22/30 = 73.3% | 18/30 = 60.0% | 40/60 = 66.7% | — | — |
+| fft-seed2 ckpt35 | **25/30 = 83.3%** | 19/30 = 63.3% | 44/60 = 73.3% | **+6.7pp** | 0.34 |
+| v8-lora ckpt30 | 21/30 = 70.0% | 18/30 = 60.0% | 39/60 = 65.0% | −1.7pp | 1.00 |
+| fft-seed3 ckpt55 | 20/30 = 66.7% | 15/30 = 50.0% | 35/60 = 58.3% | −8.3pp | 0.23 |
+
+n=60 per arm, all p > 0.2 → **directionally interesting, not statistically
+established.** The +6.7 to −8.3pp spread across three curators from the same
+training recipe is real signal about variability, but individually none of
+the arms clear the noise floor.
+
+Reading if it holds up at higher n: ALFWorld-trained curators do not
+uniformly transfer to reasoning. The seed-2 curator learned skill-writing
+craft that generalises; the seed-3 curator learned something that actively
+interferes with math reasoning. Which particular checkpoint you pick from
+the sweep matters massively for cross-domain use.
+
+### 2. Seed-3 8B ranking is decorrelated from 32B transfer
+
+Full every-5 32B transfer sweep on seed-3 checkpoints, McNemar vs canonical
+49.3% 32B no-memory baseline:
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR (32B) | **+13.6** | +0.0 | **−8.6** | −8.6 | +4.3 | +5.7 | +7.1 | +7.9 | −0.7 | +2.1 | +2.1 | +2.1 |
+| p | **.004** | 1.0 | **.036** | .058 | .42 | .28 | .16 | .08 | 1.0 | .76 | .74 | .75 |
+| ΔSR on 8B (for reference) | −2.1 | +2.9 | −0.7 | −2.9 | +6.4 | +2.1 | −5.0 | +7.9 | +8.6 | +5.7 | **+11.4** | +3.6 |
+
+**Peak on 32B is ckpt5 (+13.6pp, p=0.004). Peak on 8B is ckpt55 (+11.4pp,
+p=0.011).** The on-8B best-checkpoint transfers only +2.1pp (not significant)
+on 32B. A curator that has barely started training (ckpt5, 5 GRPO steps in)
+transfers **significantly better** to 32B than the fully-trained ckpt55.
+
+This is a stronger form of the "8B ranking inverts on 32B" finding from the
+first transfer sweep. It's not just that the ordering shifts — the two
+curves are essentially decorrelated. The pattern that made a curator best on
+8B is not the same pattern that makes a curator transfer well on 32B.
+
+Two threats to that reading: ckpt5 is a very early curator that has emitted
+maybe 5 groups × 10 positions ≈ 50 curation ops total; there might be a
+"early is better because it hasn't overfit yet" story. And the seed-2
+transfer numbers we had earlier (n=1) were peaks on the 8B curve — worth
+running seed-2's full every-5 32B sweep to check whether the decorrelation
+is a seed-3 quirk or a general property.
+
+Artifacts: `output/eval-reasoning-transfer/`, `output/eval-transfer-32b-seed3/`.
+
+---
+
 ## Seed-3 FFT completes — non-monotone shape confirmed across N=3, peak indices wild (2026-07-14)
 
 `algo1fftseed3` (seed=456, otherwise identical to seed-1/seed-2) completed 60/60

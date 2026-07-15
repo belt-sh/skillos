@@ -74,6 +74,58 @@ def solve_one(row: dict, repo: SkillRepo, app: str, max_tokens: int,
             "n_skills": len(skills), "wall_s": time.time() - t0}
 
 
+def run_closed_loop(rows: list[dict], out_path: str, curator_checkpoint: str,
+                    app: str, max_tokens: int, temperature: float, top_p: float,
+                    reasoning: str, parallel: int) -> None:
+    """Streaming curation across problems. Serial in problem order (repo evolves
+    across problems), but each problem's executor call runs solo — no batching
+    since the curation step needs the repo state stable while it fires.
+
+    Cross-domain use: the curator was trained on ALFWorld trajectories (task
+    description + action/observation steps). We adapt reasoning problems into
+    the same trajectory shape: task = the problem statement; trajectory = a
+    single step whose 'action' is the executor's CoT + boxed answer, whose
+    'observation' is the graded outcome. The curator then decides what skill
+    to write, if any.
+    """
+    from scripts.eval_streaming_curation import CuratorInference
+    curator = CuratorInference(curator_checkpoint, device="cuda",
+                               max_new_tokens=1536, temperature=0.0)
+    repo = SkillRepo()
+    with open(out_path, "w") as f:
+        for i, row in enumerate(rows, 1):
+            rec = solve_one(row, repo, app, max_tokens, temperature, top_p, reasoning)
+            traj = {
+                "task": row["problem"],
+                "task_type": row["kind"],
+                "success": rec["correct"],
+                "gamefile": row["id"],
+                "steps": 1,
+                "trajectory": [{
+                    "step": 1,
+                    "action": (rec.get("response") or "")[:6000],
+                    "observation": (
+                        f"correct answer is {row['answer']}. "
+                        f"executor answered {rec.get('pred')} — "
+                        f"{'CORRECT' if rec['correct'] else 'INCORRECT'}."),
+                }],
+                "n_retrieved": rec["n_skills"],
+            }
+            curation = {}
+            try:
+                curation = curator.curate(repo, traj)
+            except Exception as e:
+                curation = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+            rec = {**rec, "curation": curation,
+                   "repo_size": len(repo), "repo_tokens": repo.total_tokens()}
+            f.write(json.dumps(rec) + "\n"); f.flush()
+            marker = "OK" if rec["correct"] else "XX"
+            n_ops = curation.get("ops_executed", 0)
+            print(f"[{i:4d}/{len(rows)}] {rec['id']:<15s} {marker} pred={rec['pred']!s:<6s} "
+                  f"gold={rec['gold']:<4s} ops={n_ops} repo={len(repo)} "
+                  f"{rec['wall_s']:.1f}s", flush=True)
+
+
 def run_no_memory(rows: list[dict], out_path: str, app: str, max_tokens: int,
                   temperature: float, top_p: float, reasoning: str,
                   parallel: int) -> None:
@@ -150,9 +202,12 @@ def main() -> int:
         run_no_memory(rows, args.out, args.executor_app, args.max_tokens,
                       args.temperature, args.top_p, args.reasoning, args.parallel)
     else:
-        print("closed_loop not implemented in MVP; blocked on GPUs anyway "
-              "(seed-3 is training). Coming next.", file=sys.stderr)
-        return 2
+        if not args.curator_checkpoint:
+            print("closed_loop requires --curator-checkpoint", file=sys.stderr)
+            return 2
+        run_closed_loop(rows, args.out, args.curator_checkpoint,
+                        args.executor_app, args.max_tokens, args.temperature,
+                        args.top_p, args.reasoning, args.parallel)
 
     summarize(args.out)
     return 0

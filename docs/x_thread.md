@@ -1,6 +1,6 @@
 # SkillOS: What's behind the "8B curator beats Gemini-2.5-Pro" claim?
 
-**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. But two findings don't match the paper: the training curve is non-monotone-with-post-peak-regression (reproducible across three seeds, peak indices at ckpt 20 / 35 / 55), and the ALFWorld no-memory baseline sits 14pp below the paper on the same executor that reproduces the reasoning baseline within 1σ. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
+**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. Three findings don't match the paper: (1) the training curve is non-monotone-with-post-peak-regression, reproducible across three seeds, peak indices at ckpt 20 / 35 / 55; (2) the on-8B ranking is decorrelated from 32B transfer performance — a barely-trained ckpt5 transfers +13.6pp to 32B while the on-8B best (ckpt55) transfers only +2.1pp; (3) cross-domain reasoning transfer swings +6.7pp to −8.3pp across curators from the same training recipe, so "SkillOS produces general skill curators" is a per-seed lottery, not a universal claim. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
 
 The article is easier to read on GitHub: [github.com/belt-sh/skillos](https://github.com/belt-sh/skillos)
 
@@ -65,7 +65,17 @@ We ran the sweep: our three best curator checkpoints (one LoRA, two FFT) driving
 
 The important part is that this generalisation direction is real. It's not a training artifact — the curator was optimised against 8B executor rewards, produced markdown skills, and those markdown skills lifted a 32B executor it had never seen. On a task family where the executor by itself hits 49% no-memory, this is the result the paper is selling and it holds.
 
-**The surprising twist:** the ranking inverts. The FFT curators that outperform on 8B held-out eval transfer worst on 32B. The LoRA curator that ranked third on 8B transfers best on 32B. My reading is that FFT skills overfit to specific 8B executor quirks — the "how this particular model likes its skills phrased" surface — while LoRA's constrained update produces more generic skills that survive an executor swap. Single run per arm, so hypothesis, not established. Worth its own follow-up.
+**The surprising twist:** the ranking inverts. On the initial 3-arm comparison, FFT curators that top the 8B held-out eval transfer worst on 32B, and the LoRA curator that ranked third on 8B transfers best. To check whether that was a peak-checkpoint artifact, I ran the full every-5 32B transfer sweep on seed-3 — 12 arms, same paired-McNemar protocol. The pattern got sharper:
+
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR on 32B | **+13.6** | +0.0 | −8.6 | −8.6 | +4.3 | +5.7 | +7.1 | +7.9 | −0.7 | +2.1 | +2.1 | +2.1 |
+| p (32B) | **.004** | 1.0 | **.036** | .058 | .42 | .28 | .16 | .08 | 1.0 | .76 | .74 | .75 |
+| ΔSR on 8B (for reference) | −2.1 | +2.9 | −0.7 | −2.9 | +6.4 | +2.1 | −5.0 | +7.9 | +8.6 | +5.7 | **+11.4** | +3.6 |
+
+**Peak on 32B is ckpt5 (+13.6pp, p=0.004). Peak on 8B is ckpt55 (+11.4pp, p=0.011).** The ckpt55 that peaks on 8B transfers only +2.1pp (not significant) on 32B. And a curator that has barely started training — 5 GRPO steps in, roughly a few hundred curation ops emitted total — transfers **significantly better** on 32B than the fully-trained one.
+
+The two curves are not just ranked differently. They're essentially decorrelated. Whatever pattern makes a curator best on 8B is not the same pattern that makes it transfer well to 32B. My reading: FFT skills learn 8B-specific interaction quirks; the very early ckpts, before that overfitting sets in, are more generic and transfer better. Worth its own follow-up sweep on seed-2 to check whether this is a seed-3 quirk or a general property.
 
 ## The bad news: the training curve is non-monotone and peak indices are wild
 
@@ -95,9 +105,25 @@ Result: natural distribution *kills* the lift. No arm significant, best +5.7pp p
 
 Result: curriculum shows no significant lift at any checkpoint (best +4.3pp p=0.36). Same oscillating shape. (This run also got taken out by a 12-hour OpenRouter provider outage at step 49; more on the ops side later.)
 
-With both halves of the grouping ablation independently falsified on our stack, grouping is fully exonerated as the driver of our bimodal curve. That leaves exactly one surviving suspect: **TRL ≠ verl**. Advantage normalisation, sampling, buffer semantics — the framework layer.
+With both halves of the grouping ablation independently falsified on our stack, grouping is fully exonerated as the driver of our non-monotone curve. That leaves exactly one surviving suspect: **TRL ≠ verl**. Advantage normalisation, sampling, buffer semantics — the framework layer.
 
 I'm not testing that one. A verl-agent port is ~1 week of engineering that doesn't change any confirmed result. It's the right next step for someone who wants to publish a follow-up specifically on the framework hypothesis. If you're reading this and thinking about doing it, the code is open and the reproduction infrastructure is built.
+
+## Bonus finding: ALFWorld-curator → reasoning transfer swings +6.7pp to −8.3pp
+
+The paper's cross-domain generalisation claim is: a curator trained on reasoning transfers to ALFWorld with +13.3pp. We haven't tested that direction. But we can test the reverse — do our ALFWorld-trained curators help reasoning?
+
+Closed-loop AIME24+25 (60 problems, 30 each), curator maintains its own skill repo across problems using the same `curate_and_advance` interface it was trained with. No-memory baseline is 40/60 = 66.7%.
+
+| curator (ALFWorld-trained) | AIME24 | AIME25 | overall | ΔSR | McNemar p |
+|---|---|---|---|---|---|
+| **fft-seed2 ckpt35** | **25/30 = 83.3%** | 19/30 = 63.3% | **44/60 = 73.3%** | **+6.7pp** | 0.34 |
+| v8-lora ckpt30 | 21/30 = 70.0% | 18/30 = 60.0% | 39/60 = 65.0% | −1.7pp | 1.00 |
+| **fft-seed3 ckpt55** | 20/30 = 66.7% | **15/30 = 50.0%** | **35/60 = 58.3%** | **−8.3pp** | 0.23 |
+
+n=60 per arm, all p > 0.2, so **directionally interesting, not statistically established.** But look at the spread across three curators from the same training recipe — **+6.7 to −8.3pp**. Same code, three seeds, and the ALFWorld curator swings from "helps math meaningfully" to "actively interferes with math" depending on which checkpoint you picked.
+
+If this holds up at higher n, it says the trained curator can learn general skill-writing craft, or it can learn ALFWorld-specific interaction patterns that hurt on other domains. Which mode it lands in depends on the seed. That's a much messier picture than "SkillOS produces general skill curators." More like "SkillOS produces general skill curators sometimes." The seed-2 fft curator hitting 83% on AIME24 (baseline 73%) with a skill repo it wrote by watching an ALFWorld executor pick up mugs is either a nice cross-domain result or noise. n=60 can't tell you which. Adding this to the follow-up list.
 
 ## The baseline gap: same executor, different story per benchmark
 
