@@ -7,6 +7,15 @@ build/
 output
 output/
 logs/
+
+# GPQA-Diamond is a gated dataset (Idavidrein/gpqa). Access is conditional on
+# never publishing problem text, options, answers, or model responses. Per-problem
+# outputs already land under the ignored output/, but block the pattern outright
+# so a `git add -f` or a stray path can't leak them. See data/README.md.
+*gpqa*.jsonl
+*gpqa*.json
+**/gpqa_problems*
+
 wandb/
 *.pt
 *.safetensors

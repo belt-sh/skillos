@@ -145,24 +145,34 @@ legacy/                  # superseded launchers and configs, kept for provenance
 
 ## What's confirmed vs open
 
+Full write-up with figures: [`docs/repro_report.md`](docs/repro_report.md).
+
+**Read this first.** Across five ALFWorld sweeps we tested **50 checkpoint arms**
+against one baseline. Family-wide Bonferroni puts the bar at p < 0.001; the best
+arm anywhere in the project is p = 0.0026. **No same-executor ALFWorld lift
+survives correction.** Individual runs each look like they found something; the
+family says we found a noisy oscillation with a mean above zero. Treat every
+per-run peak below as a selection statistic.
+
 Confirmed:
-- Algorithm 1 with paper-faithful reward composition, executor/judge/decoder settings
-- Held-out lift, ALFWorld: LoRA +9.3pp (p=0.035), FFT seed-1 +10.7pp (p=0.032), seed-2 +13.6pp (p=0.0026), seed-3 +11.4pp (p=0.011)
-- **Non-monotone trajectory reproduced N=3**: peak indices at ckpt20/35/55, ckpt60 4-9pp below peak on every seed. Cause narrowed to TRL vs verl framework difference (DIVERGENCES #14)
-- Cross-executor transfer at parity: 8B-trained LoRA curator lifts 32B executor +12.9pp (p=0.0064), 62.1% absolute
-- **8B ranking is decorrelated from 32B transfer** (seed-3 every-5 sweep): 32B peak at ckpt5 (+13.6pp p=0.004), 8B peak at ckpt55 (+11.4pp p=0.011). Early curators transfer better than late ones on the executor swap.
-- Reasoning baseline reproduces paper within 1.1σ on average across AIME24/25 + GPQA-D
-- ALFWorld baseline gap is env-specific (same executor matches paper on reasoning)
+- Algorithm 1 with paper-faithful reward composition, executor/judge/decoder settings, in **two** RL frameworks (TRL and verl-agent/GiGPO)
+- Per-run peak held-out lift, ALFWorld: LoRA +9.3pp (p=0.035), FFT seed-1 +10.7pp (p=0.032), seed-2 +13.6pp (p=0.0026), seed-3 +11.4pp (p=0.011), verl/GiGPO +7.1pp (p=0.099) — see the caveat above
+- **Non-monotone trajectory reproduced in 5 runs across 2 frameworks**: peak indices at ckpt 20/30/35/55, ckpt60 back at baseline. DIVERGENCES #14 (TRL≠verl) is **closed** — the oscillation is intrinsic to the method, not a framework artifact. Peak index is RNG-path-dependent.
+- **The reward machinery is healthy** — within GRPO groups `r_task` supplies 78.9% of the reward variance the advantage sees, and all 80 logged groups had non-zero `r_task` variance. Task reward still only moved +0.035 (95% CI ±0.034) over 60 steps while policy entropy collapsed 0.139 → 0.035.
+- Cross-executor transfer at parity with the paper: 8B-trained curator lifts a 32B executor to **62.9%** (+13.6pp, p=0.0043; paper reports 61.2%)
+- **Curator quality does not transfer across executor scale**: pooled Pearson r = −0.20 over 24 checkpoint pairs, −0.68 within seed-2, where the on-8B peak transfers to −4.3pp on 32B. The best 32B curator is seed-3 **ckpt5** — five GRPO steps in. Sweep on your target executor.
+- **Cross-domain transfer reverses sign vs the paper**: a reasoning-trained curator on ALFWorld scores −14 to −18pp (p ≤ 0.0005) at every checkpoint past step 40, against the paper's +13.3pp claim. These are the only results that survive multiplicity correction comfortably.
+- Reasoning curator training is a **null** on same-domain eval (best ckpt30, −0.8pp vs the 61.2% aggregate baseline)
+- Reasoning baselines reproduce the paper within 1.1σ on average across AIME24/25 + GPQA-D
+- ALFWorld baseline gap is env-specific (the same executor matches the paper on reasoning)
 
 Suggestive (directional, underpowered):
 - **ALFWorld-curator → reasoning transfer is asymmetric**: fft-seed2 ckpt35 +6.7pp on AIME24+25, fft-seed3 ckpt55 −8.3pp, v8-lora ckpt30 −1.7pp. All n=60, all p > 0.2 — needs higher-n to establish.
 
 Open:
-- WebShop untouched
-- Reasoning-trained curator (paper's headline cross-domain generalisation direction)
-- TRL → verl port (only way to test the framework hypothesis directly)
-- Higher-n cross-domain reasoning transfer (n=60 is directional, not established)
-- 32B transfer sweep on seed-2 (does the 8B/32B decorrelation replicate?)
+- **WebShop untouched.** The paper's third benchmark; we deliberately skipped it once the cross-domain claim became testable via the reasoning→ALFWorld direction. The three-benchmark averages are therefore out of reach.
+- **The 14pp 8B ALFWorld baseline gap** (33.6% vs the paper's 47.9%). Ruled out: prompt wording, retrieval, seeds, serving precision, decode parameters. Remaining suspect is the ReAct/atomic-verb interaction. DIVERGENCES #13.
+- Higher-n everything — n=140 gives a ~±3pp noise floor, so the 7pp effects this method produces are inherently marginal at this sample size.
 
 ## Hardware
 
@@ -170,8 +180,23 @@ Open:
 |---|---|---|
 | smoke | 1× 8GB+ GPU | pipeline validation, heuristic executor |
 | LoRA | 1× H100 (80GB) | single-GPU LoRA training |
-| this repo's paper-faithful | 8× H100 + inference.sh (remote 8B executor / 32B judge) | ~3 days for 60 GRPO steps |
-| paper original | 16× H100 (verl) | ~3 days |
+| paper-faithful (TRL) | 8× H100 + inference.sh (remote 8B executor / 32B judge) | 60 GRPO steps |
+| paper-faithful (verl/GiGPO) | same | 60 GRPO steps |
+| paper original | 16× H100 (verl) | ~3 days claimed |
+
+Measured wall time for 60 GRPO steps on 8×H100, per run (from checkpoint mtimes):
+
+| run | wall | notes |
+|---|---|---|
+| ALFWorld, TRL FFT (×3 seeds) | **~2.9 days** each | |
+| Reasoning, TRL FFT (DeepMath-103K) | **~2.1 days** | |
+| ALFWorld, verl/GiGPO real env | **~10.2 days** | ~15,100 remote executor calls *per step* |
+
+The verl run is 3.5× the TRL wall time for the same 60 steps: GiGPO drives full
+ReAct episodes to 30 steps for every position of every group, so the step is
+bounded by remote executor throughput, not by local GPU compute. The GPU update
+phase is ~1.4% of wall — this workload is inference-bound end to end. Budget
+accordingly before reproducing.
 
 ## Stack
 
