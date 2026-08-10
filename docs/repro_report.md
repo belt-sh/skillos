@@ -58,7 +58,7 @@ Across these five sweeps we ran **50 checkpoint arms** against one baseline. Bon
 - *Task-type distribution* — training on natural ALFWorld type frequencies instead of uniform round-robin **kills** the lift (best +5.7pp, p=0.20).
 - *Within-group ordering* — the paper's easy→hard curriculum (Table 5) yields no significant lift at any checkpoint (best +4.3pp, p=0.36).
 
-The last two are both halves of the paper's own grouping ablation, so grouping is exonerated as the driver. See [Appendix D](#appendix-d--ablations).
+The last two are both halves of the paper's own grouping ablation, so grouping is exonerated as the driver. See [Appendix E](#appendix-e--ablations).
 
 ## Finding 2 — the optimiser chases the right signal and still barely moves it
 
@@ -95,7 +95,7 @@ Note *which* checkpoints win: seed-3's best 32B curator is **ckpt5** — five GR
 
 A curator trained on DeepMath-103K, evaluated on ALFWorld. The paper's strongest cross-domain claim is +13.3pp. We see a mild early positive (ckpt30 +8.6pp, p=0.050) and then a cliff: **ckpt45 −17.9pp (p=0.0002), ckpt50 −15.0pp (p=0.0005), ckpt55 −17.1pp (p<0.0001), ckpt60 −14.3pp (p=0.0005)**. Against a 12-arm Bonferroni bar of p<0.0042, all four survive.
 
-Same-domain reasoning curation was separately a null result: no checkpoint beat the 61.2% no-memory aggregate ([Appendix C](#appendix-c--reasoning)). The two together suggest the reasoning curator learned to write skills that are confidently wrong for an embodied executor rather than nothing at all — the most robust single effect we measured, and it points the opposite way from the paper.
+Same-domain reasoning curation was separately a null result: no checkpoint beat the 61.2% no-memory aggregate ([Appendix D](#appendix-d--reasoning)). The two together suggest the reasoning curator learned to write skills that are confidently wrong for an embodied executor rather than nothing at all — the most robust single effect we measured, and it points the opposite way from the paper.
 
 ---
 
@@ -105,7 +105,7 @@ The core method is implementable and does something. A curator trained with GRPO
 
 What we cannot support is the reliability implied by a single reported number. Across 50 checkpoints and five runs on the training executor, no lift survives multiplicity correction; the trajectory oscillates; the peak moves with the seed; and the checkpoint that wins on 8B tends to lose on 32B. Anyone building on this should sweep checkpoints on the target executor and report the whole curve.
 
-**Limits.** Our 8B ALFWorld baseline sits 14pp below the paper's and we could not close it (see [Appendix E](#appendix-e--the-baseline-gap)) — absolute comparison is void, paired lifts are fine. n=140 gives a ~±3pp noise floor, so 7pp effects are inherently marginal. WebShop, the paper's third benchmark, was not attempted. Reasoning training ran with ~24% of rollouts hitting rate-limit cuts, a real confound on Appendix C's null.
+**Limits.** Our 8B ALFWorld baseline sits 14pp below the paper's and we could not close it (see [Appendix F](#appendix-f--the-baseline-gap)) — absolute comparison is void, paired lifts are fine. n=140 gives a ~±3pp noise floor, so 7pp effects are inherently marginal. WebShop, the paper's third benchmark, was not attempted. Reasoning training ran with ~24% of rollouts hitting rate-limit cuts, a real confound on Appendix C's null.
 
 **Artifacts.** Merged HF checkpoints for both frameworks, all 140-game paired eval JSONLs, and the training code are being released so every McNemar in this report can be recomputed and every claim re-tested on other executors.
 
@@ -178,7 +178,71 @@ Variance decomposition is Var(total) = Σᵢ Cov(wᵢxᵢ, total), computed with
 
 **Step-40 executor outage.** A remote-executor outage zeroed success for one step: 125 minutes of dead air, `r_task` = 0, largest advantage spread in the run (4.426 vs ~2.0 typical), grad norm 1.991. It did **not** propagate — steps 41–48 read 1.52/1.44/1.51/1.54/1.52/1.41/1.35/1.46, and the grad-norm rise starts at step 49. ckpt40 scored 39.3% (+5.7pp) on held-out eval, mid-pack. We considered restarting from ckpt35 and decided against it; the eval vindicated that.
 
-## Appendix C — reasoning
+## Appendix C — why the verl run took 10 days and the TRL runs took 3
+
+The obvious reading — "verl is slower" — is wrong, and worth correcting because
+it changes how you'd budget a reproduction.
+
+Never compare `s/it` across frameworks: a "step" is whatever the config says it
+is. Normalising to the atomic unit of work (remote executor calls, since this
+workload is inference-bound end to end):
+
+| | TRL FFT seed-2 | verl/GiGPO | ratio |
+|---|---|---|---|
+| wall per GRPO step | 1.16 h | 4.11 h | **3.58×** |
+| remote calls per step | 1,698 | 15,986 | **9.42×** |
+| sustained call throughput | 24 /min | 64 /min | **0.38×** (verl 2.6× faster) |
+| peak call throughput | 105 /min | 505 /min | |
+
+**verl did 9.4× the remote work per step and paid only 3.6× the wall clock — so
+per unit of work it was 2.6× more efficient than the TRL path.** It looks slower
+only because a verl "step" is a much bigger step.
+
+Where the wall goes, in verl (from the step timing breakdown):
+
+| phase | share of step |
+|---|---|
+| `gen` — rollouts against the remote executor | **85.3%** |
+| `update_actor` — the actual GPU gradient step | **1.4%** |
+| `old_log_prob` + `ref` | 0.6% |
+| reward computation | <0.1% |
+
+This is not a GPU workload. 8×H100 sit essentially idle waiting on remote
+inference; the local compute is ~1.4% of wall. Anything you do to the training
+framework, sharding strategy, or GPU count moves at most a few percent of the
+total. The only lever that matters is executor call volume and remote
+throughput.
+
+**Where the 9.4× comes from.** Roughly 2× is config, and the rest is episode
+length:
+
+- **Episodes per step, 2×.** verl: `train_batch_size=8` groups × `rollout.n=8`
+  GRPO rollouts × `|G|=10` Algorithm-1 positions = **640 ALFWorld episodes per
+  step**. TRL: `per_device=2 × grad_accum=2 × 8 processes = 32` rollouts ×
+  `|G|=10` = **320 episodes per step**. Note the asymmetry that makes this easy
+  to get wrong: in TRL-GRPO the generation batch is a *rollout* count that
+  `num_generations` divides into unique prompts, whereas in verl
+  `train_batch_size` is the prompt/env count and `rollout.n` multiplies it.
+- **Calls per episode, ~4.7×.** verl averaged ~25 executor calls per episode,
+  TRL ~5. Both runs capped the executor at a similar depth (30 steps for verl,
+  25 for TRL), so **the cap does not explain this** — verl's episodes actually
+  played out to roughly the paper's reported 21.1-step average, while TRL's
+  terminated far earlier.
+
+That last point is an **open item, not a settled explanation.** Our per-call
+task log records only timestamp, role, app and task id, so we cannot group calls
+into episodes retrospectively to confirm the mechanism. If TRL episodes really
+were ~5 steps against a 25-step cap, TRL's *training-time* rollouts were much
+shorter than the paper's, which is a fidelity difference we did not control for
+and which would sit underneath every TRL number in this report. It does not
+affect any held-out result — eval runs through the same harness for both
+frameworks — but it is the first thing we would instrument on a rerun.
+
+Practical guidance if you are reproducing this: budget on episodes and executor
+calls, not on GPU-hours; expect the remote endpoint to be the binding
+constraint; and log per-episode step counts from the start.
+
+## Appendix D — reasoning
 
 **Baselines** (no-memory, Qwen3-8B, greedy). GPQA-Diamond reported aggregate-only per the dataset access condition.
 
@@ -200,7 +264,7 @@ Reasoning baselines reproduce within noise on the same executor stack that is 14
 | ΔSR | +7.1 | −2.9 | −0.7 | +0.7 | +0.7 | +8.6 | +0.7 | +3.6 | **−17.9** | **−15.0** | **−17.1** | **−14.3** |
 | p | .11 | .52 | 1.0 | 1.0 | 1.0 | .050 | 1.0 | .47 | **.0002** | **.0005** | **<.0001** | **.0005** |
 
-## Appendix D — ablations
+## Appendix E — ablations
 
 ![grouping ablations](figures/fig6_grouping_ablations.png)
 
@@ -216,13 +280,13 @@ Uniform round-robin's balanced exposure to the low-baseline types (Clean/Cool/He
 
 Also ruled out earlier and not re-litigated here: missing KL anchor (β=0.001 is present, and the curve is not a U-shape), executor decode parameters (temp/top_p/top_k sweep, all p>0.5), retrieval, prompt wording (Fig 9 verbatim), and serving precision.
 
-## Appendix E — the baseline gap
+## Appendix F — the baseline gap
 
 Our ALFWorld no-memory baseline is 33.6% vs the paper's 47.9% on nominally the same executor. Ruled out: prompt wording (paper Fig 9 verbatim), retrieval implementation, random seeds, serving precision (local bf16 ≈ remote), and executor decode parameters (full temp/top_p/top_k sweep, all arms p>0.5; GiGPO's top_p=1.0/top_k-off is *worse* for Qwen3).
 
 Remaining suspect, from trace inspection: the ReAct/atomic-verb interaction. Qwen3-8B narrates physical actions (`"I open the microwave and place the item inside"`) instead of emitting ALFWorld's required atomic verb (`heat X with microwave`). Heat SR is 25% on 8B and unlocks to 56–62% on 32B, where the narration failure disappears. The gap concentrates on long-horizon multi-step types. Unresolved.
 
-## Appendix F — divergences from the paper
+## Appendix G — divergences from the paper
 
 | # | divergence | status |
 |---|---|---|
@@ -239,7 +303,7 @@ Remaining suspect, from trace inspection: the ReAct/atomic-verb interaction. Qwe
 
 Full detail and history in [`../DIVERGENCES.md`](../DIVERGENCES.md); dated run-by-run log in [`../JOURNAL.md`](../JOURNAL.md).
 
-## Appendix G — reproducing this
+## Appendix H — reproducing this
 
 Training:
 
