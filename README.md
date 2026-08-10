@@ -1,10 +1,33 @@
 # SkillOS
 
-Open reproduction of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Google Cloud AI Research + UIUC + MIT, 2026) on [HuggingFace TRL](https://github.com/huggingface/trl). The paper trains a curator with GRPO on 16 H100s using verl; this repo reproduces the same result on 8 H100s using TRL, with all training and eval code, three benchmarks (ALFWorld + AIME + GPQA-Diamond), and every deviation logged.
+Open reproduction of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Google Cloud AI Research + UIUC + MIT, 2026). The paper trains a curator with GRPO on 16 H100s using verl. We reproduced it on 8 H100s in **both** [TRL](https://github.com/huggingface/trl) and [verl-agent/GiGPO](https://github.com/langfengQ/verl-agent) — seven full 60-step training runs, ~2 months of box time — with all training and eval code, three benchmarks (ALFWorld + AIME + GPQA-Diamond), and every deviation logged.
+
+Short version of what we found: the method works, the effect is smaller and far less stable than a single reported number suggests, it transfers better to a *bigger* executor than to the one it trained against, and the paper's cross-domain transfer claim comes out with the opposite sign. Details in [`docs/repro_report.md`](docs/repro_report.md).
 
 <p align="center">
   <img src="assets/banner.png" alt="SkillOS Training Loop" width="720" />
 </p>
+
+## Artifacts
+
+Weights and every paired eval rollout are published, so nothing here has to be taken on trust:
+
+| artifact | what it is |
+|---|---|
+| [`skillos-alfworld-eval-arms`](https://huggingface.co/datasets/inference-sh/skillos-alfworld-eval-arms) | **Start here.** 135 per-game eval JSONLs across 13 sweeps. Recompute every significance test in this repo on a laptop — no GPU, no API key. |
+| [`skillos-curator-qwen3-8b-verl-gigpo`](https://huggingface.co/inference-sh/skillos-curator-qwen3-8b-verl-gigpo) | All 12 checkpoints of the verl/GiGPO run, in `step_N/` subfolders. The whole curve, because the curve *is* the finding. |
+| [`skillos-curator-qwen3-8b-trl-fft`](https://huggingface.co/inference-sh/skillos-curator-qwen3-8b-trl-fft) | 7 selected TRL arms across 3 seeds — each seed's peak and final, plus `fft-seed3-step5`, the best 32B-transfer curator in the project. |
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# the best curator we trained, as measured on the executor you'd actually ship
+name, sub = "inference-sh/skillos-curator-qwen3-8b-trl-fft", "fft-seed3-step5"
+tok = AutoTokenizer.from_pretrained(name, subfolder=sub)
+model = AutoModelForCausalLM.from_pretrained(name, subfolder=sub, dtype="bfloat16")
+```
+
+Before picking a checkpoint, read the model cards — **the final checkpoint is the worst one in every run**, the peak moves with the seed, and the best checkpoint on an 8B executor is often a poor one on a 32B executor. GPQA rollouts are deliberately absent from all of it (gated dataset; see [`data/README.md`](data/README.md)).
 
 ## What is SkillOS
 
@@ -14,16 +37,17 @@ Skill files are markdown with YAML frontmatter, the same format used by [Anthrop
 
 ## Headline results
 
-Best single-run numbers, paired McNemar vs no-memory baseline unless noted. Full narrative in [`JOURNAL.md`](JOURNAL.md), every deviation from the paper in [`DIVERGENCES.md`](DIVERGENCES.md).
+Paired McNemar vs a no-memory baseline unless noted. Full write-up with figures in [`docs/repro_report.md`](docs/repro_report.md), narrative in [`JOURNAL.md`](JOURNAL.md), every deviation from the paper in [`DIVERGENCES.md`](DIVERGENCES.md).
 
-**Cross-executor transfer (paper's generalisation claim):**
+**Cross-executor transfer (paper's generalisation claim) — the strongest result:**
 
 | curator (8B-trained) → executor | abs SR | Δ vs no-memory | p (McNemar, n=140) |
 |---|---|---|---|
-| v8-lora ckpt30 → Qwen3-32B | **62.1%** | **+12.9pp** | **0.0064** |
+| fft-seed3 ckpt5 → Qwen3-32B | **62.9%** | **+13.6pp** | **0.0043** |
+| v8-lora ckpt30 → Qwen3-32B | 62.1% | +12.9pp | 0.0064 |
 | paper headline (SkillOS, Qwen3-32B executor) | 61.2% | ~+13pp | — |
 
-Above the paper's headline on this single run. Baseline stochasticity is ~±4pp, so treat as "reproduces at parity" rather than "beats."
+Reproduces at parity with the paper — baseline stochasticity is ~±4pp, so read this as "at parity", not "beats". The curious part is *which* checkpoint wins: `ckpt5`, five GRPO steps in, and one of the weakest arms on the 8B executor it trained against.
 
 **Reasoning baselines (no-memory, Qwen3-8B executor):**
 
@@ -43,19 +67,23 @@ Above the paper's headline on this single run. Baseline stochasticity is ~±4pp,
 
 The −14pp baseline gap is **environment-specific**: same executor reproduces the paper on reasoning within noise, so the ALFWorld gap is the ReAct/atomic-verb interaction, not model quality. Details: [`DIVERGENCES.md`](DIVERGENCES.md) #13, gotcha `executor-atomic-verb-gap`.
 
-## Training trajectory is non-monotone on TRL, peak indices are wild
+## The training trajectory is non-monotone, and the peak moves
 
-Held-out lift over 60 training steps, sweep vs canonical 33.6% baseline:
+Held-out lift over 60 training steps, every-5 sweep vs the canonical 33.6% baseline:
 
 | run | peak ckpt | peak lift | p | ckpt60 lift |
 |---|---|---|---|---|
+| v8 LoRA r=32 (TRL) | 30 | +9.3pp | 0.035 | +1.4pp |
 | seed-1 FFT (seed=42)  | 20 | +10.7pp | 0.032 | +5.7pp |
-| seed-2 FFT (seed=123) | 35 | +13.6pp | 0.0026 | +4.3pp |
-| seed-3 FFT (seed=456) | **55** | **+11.4pp** | **0.011** | +3.6pp |
+| seed-2 FFT (seed=123) | 35 | **+13.6pp** | **0.0026** | +4.3pp |
+| seed-3 FFT (seed=456) | 55 | +11.4pp | 0.011 | +3.6pp |
+| verl/GiGPO (real env) | 30 | +7.1pp | 0.099 | +0.7pp |
 
-Three independent runs, three significant peaks, peak indices spread across half the training run (ckpt 20 → ckpt 55). ckpt60 sits materially below the peak on every seed. The paper reports monotone-to-60; we observe non-monotone-with-post-peak-regression on every seed we've run. Ship best-of-heldout from a sweep, not `checkpoint-60`.
+![checkpoint sweeps](docs/figures/fig2_checkpoint_sweeps.png)
 
-Systematically falsified as causes of the shape: uniform vs natural type distribution, easy→hard within-group curriculum (both halves of DIVERGENCES #0). Only surviving suspect: TRL vs verl (advantage normalisation, sampling, buffer semantics). See gotcha `fft-bimodal-not-lora`.
+Five independent runs. Every one has a significant-looking peak; no two peak in the same place; the curve crosses its own baseline repeatedly; and ckpt60 sits at or near baseline every time. The paper reports a monotone-to-60 curve. **Ship best-of-heldout from a sweep, not `checkpoint-60`** — and see the multiplicity warning above before believing any single arm, including these.
+
+Falsified as causes of the shape, each with a full training run plus a 140-game sweep: LoRA vs full fine-tuning, uniform vs natural type distribution, easy→hard within-group curriculum (both halves of DIVERGENCES #0), and the RL framework itself (#14 — verl/GiGPO reproduces the oscillation). Since the verl run also used 2× the batch ([#15](DIVERGENCES.md), our error), small-effective-batch gradient noise is ruled out too. Nothing we varied removes it.
 
 ## Quick start
 
@@ -78,7 +106,7 @@ python -m skillos.train --config configs/alfworld_single_gpu.yaml
 Reasoning benchmark, no local GPU needed (executor is remote):
 
 ```bash
-# GPQA-Diamond gated: huggingface-cli login (needs dataset access request)
+# GPQA-Diamond gated: hf auth login, then request access (see data/README.md)
 python -m scripts.eval_reasoning --mode no_memory --dataset aime \
   --executor infsh --executor-app openrouter/qwen3-8b \
   --parallel 12 --out output/eval-reasoning/nomem_aime.jsonl

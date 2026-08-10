@@ -43,7 +43,7 @@ Both require `belt login` for the inference.sh executor + judge, and `alfworld-d
 
 - ALFWorld: `alfworld-download -f`, no auth.
 - AIME24, AIME25: HuggingFace public.
-- GPQA-Diamond: gated. `huggingface-cli login` and request access at https://huggingface.co/datasets/Idavidrein/gpqa. Access is conditional on **not leaking problem text, options, or answers into any public-visible artifact** (git, PRs, docs, screenshots). Report aggregate accuracy only.
+- GPQA-Diamond: gated. `hf auth login` and request access at https://huggingface.co/datasets/Idavidrein/gpqa. Access is conditional on **not leaking problem text, options, or answers into any public-visible artifact** (git, PRs, docs, screenshots). Report aggregate accuracy only.
 
 ## reporting bugs and reproductions
 
