@@ -1,165 +1,265 @@
 # Reproducing SkillOS: an independent report
 
-Independent reproduction of [SkillOS](https://arxiv.org/abs/2605.06614) (Ouyang et al., 2026) on TRL 1.4 + DeepSpeed ZeRO-3 + vLLM colocate, 8×H100. Executor and judge run remotely on inference.sh. Three benchmarks: ALFWorld (agentic), AIME24 + AIME25 (numeric reasoning), GPQA-Diamond (multiple-choice science reasoning). Report authored in-repo alongside the code so every number can be recomputed from the JSONLs referenced below.
+An independent reproduction of [SkillOS](https://arxiv.org/abs/2605.06614) (Ouyang et al., 2026) — GRPO-training a *curator* LLM that maintains a markdown skill repo for a frozen *executor* — on 8×H100, in two RL frameworks (TRL and verl-agent/GiGPO), across ALFWorld and three reasoning benchmarks. Roughly two months of 8×H100 wall time and seven full 60-step training runs.
 
-## abstract
+Every number below is recomputed from JSONLs in this repo. Figures regenerate with `.venv/bin/python scripts/make_report_figures.py`.
 
-We reproduce the core method — GRPO-training a curator that maintains a markdown skill repo for a frozen executor — using TRL instead of the paper's verl framework, on 8 H100s instead of 16. The paper's headline generalisation claim (an 8B-trained curator lifting a 32B executor to ~61.2% ALFWorld SR) reproduces on a single run at 62.1% (+12.9pp vs no-memory, McNemar p=0.0064). Reasoning baselines reproduce within 1.1σ on average across three datasets. Two independent findings:
+---
 
-1. **The training trajectory is bimodal, not monotone.** Held-out lift peaks mid-run (peak indices vary by seed) and regresses by step 60. Reproduces on two seeds. Systematic falsification rules out grouping-recipe explanations (both halves of the paper's grouping ablation).
-2. **The 8B ALFWorld no-memory baseline sits 14pp below the paper on the same executor that reproduces the paper's reasoning baseline within noise.** The gap is environment-specific, traced to the ReAct + atomic-verb interaction between Qwen3-8B and ALFWorld.
+## TL;DR
 
-The surviving suspect for both findings is the framework confound: TRL ≠ verl in advantage normalisation, sampling semantics, and buffer handling. All divergences from the paper are enumerated in [`../DIVERGENCES.md`](../DIVERGENCES.md).
+1. **The method works, but the effect is small and mostly a checkpoint-selection artifact.** Held-out ALFWorld lift is real at *some* checkpoint in every run (+7.1 to +13.6pp), but the curve is non-monotone with 5–14pp swings and the peak index is unstable across seeds (ckpt 20/30/35/55). **No single-checkpoint lift survives correction for the 50 checkpoints we tested.** Report the sweep, not your best arm.
+2. **This is not a plumbing artifact.** We reproduced the oscillation in five independent runs and falsified four candidate causes — LoRA-vs-full-FT, TRL-vs-verl, task-type distribution, and within-group curriculum ordering (both halves of the paper's own grouping ablation).
+3. **The reward machinery is healthy; the learning is just weak.** Within GRPO groups, downstream task success supplies 79% of the reward variance that reaches the gradient — the optimiser is chasing the right thing. Over 60 steps it moves training task reward by +0.035 (95% CI ±0.034). That, not a broken reward, is why held-out lift is a few points.
+4. **Curator quality does not transfer across executor scale.** The best checkpoint for the 8B executor that generated the training data is *not* the best for a 32B executor and can be actively harmful there (pooled r = −0.20 across 24 checkpoint pairs; r = −0.68 within one seed). Our strongest positive result comes from this: an 8B-trained curator lifts Qwen3-32B to **62.9%** (+13.6pp), at parity with the paper's headline 61.2%.
+5. **Cross-domain transfer reproduces with the opposite sign.** The paper reports +13.3pp on ALFWorld from a reasoning-trained curator. We measure **−14 to −18pp (p ≤ 0.0005)** at every checkpoint past step 40. These are the only results in the project that survive multiple-comparison correction comfortably.
 
-## 1. background
+**Load-bearing caveat.** Our 8B ALFWorld no-memory baseline is 33.6% vs the paper's 47.9%, unexplained after ruling out prompt wording, retrieval, seeds, precision/serving, and decode parameters. Absolute ALFWorld numbers are therefore not comparable to the paper; paired lifts are.
 
-The paper defines a curator as an LLM whose only job is to write, revise, and delete markdown skill files after each rollout. A frozen executor retrieves the top-k relevant skills from the curator's repo before every new task. GRPO optimises the curator against a composite reward
+---
 
-    r = r_task + λ_f · r_fc + λ_u · r_cnt + λ_c · r_comp
+## What we ran
 
-where `r_task` is downstream executor success, `r_fc` counts valid function calls, `r_cnt` is a judge-scored content-quality signal (paper uses Qwen3-32B), and `r_comp` is a compression term. The training data is Algorithm 1: |G|=10 same-type task groups, curator emits `curate_and_advance` calls, `r_task` averages executor success over positions 2..|G| of the group's evolving skill repo. Paper weights: λ_f=1.0, λ_u=0.1, λ_c=0.05.
+| | |
+|---|---|
+| Curator | Qwen3-8B (as paper) — LoRA r=32 and full fine-tuning |
+| Executor | Qwen3-8B frozen during training; tested on Qwen3-8B and Qwen3-32B |
+| Judge (`r_cnt`) | Qwen3-32B (as paper) |
+| Frameworks | TRL 1.4 + DeepSpeed ZeRO-3 + vLLM colocate; **and** verl-agent/GiGPO + FSDP |
+| Hardware | 8×H100 local (curator) + inference.sh remote (executor, judge). Paper: 16 H100 |
+| Training runs | 7 × 60 GRPO steps: 1 LoRA, 3 FFT seeds, 2 grouping ablations, 1 verl/GiGPO |
+| Held-out protocol | 140 ALFWorld `valid_seen` games, paired-by-gamefile McNemar vs a fixed no-memory baseline |
+| Reasoning | AIME24 (30), AIME25 (30), GPQA-Diamond (198) — aggregate accuracies only |
 
-## 2. setup
+The verl/GiGPO run is the framework-faithful one: real ALFWorld episodes, ground-truth success, BM25 retrieval, judged `r_cnt`, 60/60 steps, ~15,100 executor calls per step, 10.4 days wall.
 
-**Hardware / framework.** 8×H100 (paper: 16). TRL 1.4 + accelerate + DeepSpeed ZeRO-3 + vLLM colocate (paper: verl-agent). ZeRO-2 hangs on this stack; ZeRO-3 is the empirically-working path. Curator on the 8 local GPUs, executor + judge on inference.sh (`openrouter/qwen3-8b` and `openrouter/qwen3-32b`).
+---
 
-**Models.** Curator = Qwen3-8B (paper: same). Frozen executor = Qwen3-8B during training. Test executors: Qwen3-8B and Qwen3-32B. Judge = Qwen3-32B (paper: same).
+## Finding 1 — held-out lift is real, non-monotone, and does not survive multiplicity
 
-**Hyperparameters.** All paper-faithful except the following documented deviations, each in [`../DIVERGENCES.md`](../DIVERGENCES.md):
+![checkpoint sweeps](figures/fig2_checkpoint_sweeps.png)
 
-- LoRA r=32 with lr scaled 10× as a sanctioned memory-fit path; full fine-tuning is used for the definitive runs.
-- Executor decode = Qwen3 model-card sampling (temp 0.6, top_p 0.95, top_k 20, reasoning-on). The paper defers executor decode to verl-agent.
-- `SKILLOS_EXECUTOR_MAX_STEPS=30` (paper trajectories average 21.1 steps).
+Five independent runs, 140 paired games each, all against the same 33.6% baseline. Every run produces a significant-looking peak somewhere. No two runs peak in the same place. The curve crosses its own baseline repeatedly.
 
-**Held-out protocol.** ALFWorld: n=140 valid_seen, paired-by-gamefile McNemar vs a fixed no-memory baseline (`output/eval-pathbv4/no_memory.jsonl`, 33.6% SR). Sweeps cover every saved checkpoint (5-step cadence). Noise floor at n=140 is ~±3pp empirically; single-arm claims gated at ~2×SE ≈ 8pp. Reasoning: AIME24 (30 problems), AIME25 (30), GPQA-Diamond (198, MC schema, `Idavidrein/gpqa`), greedy grading against reference answer.
+| run | peak | ΔSR | p | ckpt60 | ΔSR |
+|---|---|---|---|---|---|
+| v8 LoRA r=32 (TRL) | ckpt30 | **+9.3pp** | 0.035 | ckpt60 | +1.4pp |
+| FFT seed-1 (TRL) | ckpt20 | **+10.7pp** | 0.032 | ckpt60 | +5.7pp |
+| FFT seed-2 (TRL) | ckpt35 | **+13.6pp** | 0.0026 | ckpt60 | +4.3pp |
+| FFT seed-3 (TRL) | ckpt55 | **+11.4pp** | 0.011 | ckpt60 | +3.6pp |
+| GiGPO (verl, real env) | ckpt30 | **+7.1pp** | 0.099 | ckpt60 | +0.7pp |
 
-## 3. headline results
+Across these five sweeps we ran **50 checkpoint arms** against one baseline. Bonferroni sets the bar at p < 0.001; the best arm in the project is p = 0.0026. **Not one same-executor ALFWorld lift survives.** The peak-lift band (+9 to +14pp) brackets the paper's +13.3pp, so the order of magnitude is plausible — but a single arm from a single sweep is a selection statistic, and the paper's monotone-to-step-60 curve does not appear in any of our runs.
 
-### 3.1 cross-executor transfer (paper's generalisation claim)
+**Four candidate causes falsified** (each a full training run + 140-game sweep):
 
-The strongest reproduced result. 8B-trained curator drives Qwen3-32B executor, 140 paired games, no-memory reference from a fresh 32B no-memory run at 49.3%:
+- *LoRA parameterisation* — full fine-tuning reproduces the shape, slightly stronger.
+- *Framework* — verl/GiGPO reproduces the shape (black line above). TRL≠verl was our last-standing suspect; it is now closed.
+- *Task-type distribution* — training on natural ALFWorld type frequencies instead of uniform round-robin **kills** the lift (best +5.7pp, p=0.20).
+- *Within-group ordering* — the paper's easy→hard curriculum (Table 5) yields no significant lift at any checkpoint (best +4.3pp, p=0.36).
 
-| curator | executor | abs SR | Δ vs no-memory | p |
+The last two are both halves of the paper's own grouping ablation, so grouping is exonerated as the driver. See [Appendix D](#appendix-d--ablations).
+
+## Finding 2 — the optimiser chases the right signal and still barely moves it
+
+![reward composition](figures/fig1_reward_composition.png)
+
+An obvious objection to Finding 1 is that our reward was broken. It wasn't. Decomposing 850 logged rollouts from the verl run: the composite's *level* is dominated by `r_fc` (69%), a near-saturated function-call-validity term — but GRPO centres advantages within each group, so only *within-group variance* reaches the gradient, and there **`r_task` supplies 79%**. All 80 logged groups had non-zero `r_task` variance, so the group-collapse failure mode that invalidated our own earlier runs is genuinely absent here.
+
+Given a healthy task-dominated gradient, training task reward rose from 0.331 to 0.366 over 60 rounds — **+0.035, 95% CI ±0.034**. Downstream train-time success rate was flat (0.170 → 0.167).
+
+![verl training dynamics](figures/fig4_verl_training_dynamics.png)
+
+What *did* move: policy entropy collapsed 0.139 → 0.035 and grad norm rose 1.40 → 2.40, with the blow-up starting around step 48. The curator sharpens onto a fixed skill-writing style while its effect on the executor plateaus — which is a coherent mechanism for "peak mid-run, drift after."
+
+## Finding 3 — curator quality does not transfer across executor scale
+
+![8B/32B decorrelation](figures/fig3_8b_32b_decorrelation.png)
+
+Full every-5 sweeps on both seeds, curator skills driving a Qwen3-32B executor (fresh 49.3% no-memory reference). Per-checkpoint lift on 8B barely predicts lift on 32B: pooled Pearson r = **−0.20** over 24 pairs, and **−0.68** within seed-2, where the on-8B peak (ckpt35, +13.6pp) transfers to **−4.3pp**.
+
+This is also where the paper's headline generalisation claim reproduces:
+
+| curator | 32B abs SR | Δ | p |
+|---|---|---|---|
+| no memory | 49.3% | — | — |
+| **FFT seed-3 ckpt5** | **62.9%** | **+13.6pp** | 0.0043 |
+| **v8 LoRA ckpt30** | **62.1%** | **+12.9pp** | 0.0064 |
+| paper SkillOS (32B executor) | 61.2% | ~+13pp | — |
+
+Note *which* checkpoints win: seed-3's best 32B curator is **ckpt5** — five GRPO steps in. A barely-trained curator generalises better to a larger executor than a fully-trained one. Practical rule: sweep on your target executor, not your training executor.
+
+## Finding 4 — cross-domain transfer reverses sign
+
+![reasoning transfer cliff](figures/fig5_reasoning_transfer_cliff.png)
+
+A curator trained on DeepMath-103K, evaluated on ALFWorld. The paper's strongest cross-domain claim is +13.3pp. We see a mild early positive (ckpt30 +8.6pp, p=0.050) and then a cliff: **ckpt45 −17.9pp (p=0.0002), ckpt50 −15.0pp (p=0.0005), ckpt55 −17.1pp (p<0.0001), ckpt60 −14.3pp (p=0.0005)**. Against a 12-arm Bonferroni bar of p<0.0042, all four survive.
+
+Same-domain reasoning curation was separately a null result: no checkpoint beat the 61.2% no-memory aggregate ([Appendix C](#appendix-c--reasoning)). The two together suggest the reasoning curator learned to write skills that are confidently wrong for an embodied executor rather than nothing at all — the most robust single effect we measured, and it points the opposite way from the paper.
+
+---
+
+## What this adds up to
+
+The core method is implementable and does something. A curator trained with GRPO against a composite reward measurably improves a frozen executor, and the improvement is *larger and cleaner on a bigger executor than the one it trained against* — which is the interesting part, and the part that reproduces at the paper's magnitude.
+
+What we cannot support is the reliability implied by a single reported number. Across 50 checkpoints and five runs on the training executor, no lift survives multiplicity correction; the trajectory oscillates; the peak moves with the seed; and the checkpoint that wins on 8B tends to lose on 32B. Anyone building on this should sweep checkpoints on the target executor and report the whole curve.
+
+**Limits.** Our 8B ALFWorld baseline sits 14pp below the paper's and we could not close it (see [Appendix E](#appendix-e--the-baseline-gap)) — absolute comparison is void, paired lifts are fine. n=140 gives a ~±3pp noise floor, so 7pp effects are inherently marginal. WebShop, the paper's third benchmark, was not attempted. Reasoning training ran with ~24% of rollouts hitting rate-limit cuts, a real confound on Appendix C's null.
+
+**Artifacts.** Merged HF checkpoints for both frameworks, all 140-game paired eval JSONLs, and the training code are being released so every McNemar in this report can be recomputed and every claim re-tested on other executors.
+
+---
+---
+
+# Appendices
+
+## Appendix A — full ALFWorld sweep tables
+
+All arms: 140 `valid_seen` games, paired by gamefile, McNemar vs `output/eval-pathbv4/no_memory.jsonl` (47/140 = 33.6%). `B-only` = arm solved a game the baseline missed; `A-only` = the reverse.
+
+### verl/GiGPO, real ALFWorld env (`output/eval-verl-gigpo-real/`)
+
+| ckpt | abs SR | Δ | p | | ckpt | abs SR | Δ | p |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 37.1% | +3.6 | 0.4996 | | 35 | 38.6% | +5.0 | 0.2649 |
+| 10 | 39.3% | +5.7 | 0.2005 | | 40 | 39.3% | +5.7 | 0.2005 |
+| 15 | 32.1% | −1.4 | 0.8555 | | 45 | 37.1% | +3.6 | 0.4996 |
+| 20 | 39.3% | +5.7 | 0.1516 | | 50 | 33.6% | +0.0 | 1.0000 |
+| 25 | 34.3% | +0.7 | 1.0000 | | 55 | 40.0% | +6.4 | 0.1496 |
+| **30** | **40.7%** | **+7.1** | **0.0987** | | 60 | 34.3% | +0.7 | 1.0000 |
+
+### TRL runs
+
+| ckpt | v8 LoRA | FFT seed-1 | FFT seed-2 | FFT seed-3 |
 |---|---|---|---|---|
-| no memory | Qwen3-32B | 49.3% | — | — |
-| **v8-lora ckpt30** | **Qwen3-32B** | **62.1%** | **+12.9pp** | **0.0064** |
-| fft-seed1 ckpt20 | Qwen3-32B | 47.1% | −2.1pp | 0.74 |
-| fft-seed2 ckpt35 | Qwen3-32B | 55.0% | +5.7pp | 0.26 |
-| paper SkillOS (Qwen3-32B executor) | — | 61.2% | ~+13pp | — |
+| 5 | — | — | −2.9 (0.52) | −2.1 (0.68) |
+| 10 | −4.3 (0.26) | +7.1 (0.053) | +0.7 (1.00) | +2.9 (0.54) |
+| 15 | — | — | +5.7 (0.26) | −0.7 (1.00) |
+| 20 | +2.1 (0.71) | **+10.7 (0.032)** | +1.4 (0.85) | −2.9 (0.56) |
+| 25 | — | +5.7 (0.20) | +1.4 (0.85) | +6.4 (0.14) |
+| 30 | **+9.3 (0.035)** | +0.0 (1.00) | +4.3 (0.36) | +2.1 (0.69) |
+| 35 | — | +2.9 (0.60) | **+13.6 (0.0026)** | −5.0 (0.17) |
+| 40 | −2.9 (0.57) | +5.0 (0.26) | +6.4 (0.14) | +7.9 (0.061) |
+| 45 | — | — | +0.7 (1.00) | +8.6 (0.081) |
+| 50 | +4.3 (0.31) | −2.1 (0.72) | +5.7 (0.18) | +5.7 (0.17) |
+| 55 | — | — | +2.1 (0.71) | **+11.4 (0.011)** |
+| 60 | +1.4 (0.86) | +5.7 (0.18) | +4.3 (0.33) | +3.6 (0.47) |
 
-Above the paper's headline on this single run. Baseline stochasticity is ~±4pp; treat as "at parity" not "beats."
+ΔSR in pp, p in parentheses. Dashes are checkpoints not swept (the LoRA and seed-1 runs predate the every-5 sweep protocol). Artifacts: `output/eval-v8/`, `output/eval-fft/`, `output/eval-fft-seed2/`, `output/eval-fft-seed3/`.
 
-**Unexpected finding:** the on-8B ranking inverts on 32B. The best-on-8B curators (FFT) transfer weakly or negatively; the LoRA curator that ranked third on 8B transfers best on 32B. Hypothesis: FFT skills overfit to 8B executor quirks; LoRA's constrained update produces more generic skills. Single-run finding, hypothesis only. See gotcha `cross-executor-transfer-confirmed`.
+### Per-type breakdown, verl run
 
-Heat unlocks at 32B (25% → 56–62% with memory). The Heat pathology on 8B — the executor role-plays a physical microwave instead of using the `heat X with microwave` atomic verb — vanishes at 32B scale. Consistent with the gotcha `executor-atomic-verb-gap`.
+Baseline per-type SR: Clean 19% (5/27), Cool 20% (5/25), Heat 25% (4/16), Look 46% (6/13), Pick 60% (21/35), Pick2 25% (6/24). The peak arm (ckpt30) gains almost entirely on the low-baseline types: Clean 19→33%, Cool 20→36%, Heat 25→38%, while Pick2 *drops* 25→17%. Headroom is concentrated in the multi-step types, which is also where the executor's atomic-verb failures live (Appendix E).
 
-### 3.2 reasoning baselines
+## Appendix B — verl/GiGPO training dynamics
 
-| dataset | ours (no-memory) | paper (Qwen3-8B no-memory) | delta |
+60/60 steps, 2026-07-30 → 2026-08-09, 10.4 days wall, ~15,100 remote executor calls per step. Metrics from wandb `output.log` (verl's console metrics are block-buffered through Ray and arrive late or not at all).
+
+| metric | steps 1–10 | steps 50–59 | Δ |
 |---|---|---|---|
-| AIME24 | 22/30 = 73.3% | 76.0±6.9 | −2.7pp (0.4σ) |
-| AIME25 | 18/30 = 60.0% | 71.1±10.7 | −11.1pp (1.0σ) |
-| GPQA-Diamond | 118/198 = 59.6% | 61.8±1.1 | −2.2pp (2.0σ) |
-| **average** | **64.3%** | **69.6±4.7** | **−5.3pp (1.1σ)** |
+| composite reward (mean) | 1.402 | 1.443 | +0.041 |
+| train success rate | 0.170 | 0.167 | −0.003 |
+| policy entropy | 0.139 | 0.035 | **−0.104** |
+| grad norm | 1.398 | 2.396 | **+0.998** |
+| valid action ratio | 0.950 | 0.993 | +0.043 |
+| response length (tokens) | 1051 | 1046 | −4 |
 
-Every dataset within 1σ individually. 0 executor errors on GPQA. Letter distribution well-balanced (A/B/C/D each 42–54 out of 197 answerable), no degenerate mode. GPQA-D result reported aggregate-only per the dataset owner's access condition (no per-problem content in git or web-visible files).
+**Reward decomposition** (850 rollouts, paper weights λ_f=1.0, λ_u=0.1, λ_c=0.05):
 
-Closed-loop reasoning eval (curator manages skill repo across problems) is stubbed. Requires local GPU for curator inference; blocked on seed-3 completion.
-
-### 3.3 ALFWorld held-out lift
-
-Best single-run numbers, McNemar vs canonical 33.6% no-memory baseline, 140 games:
-
-| run | best ckpt | ΔSR | p |
+| component | mean | share of level | **share of within-group variance** |
 |---|---|---|---|
-| v8 LoRA r=32 | ckpt30 | +9.3pp | 0.035 |
-| seed-1 FFT | ckpt20 | +10.7pp | 0.032 |
-| seed-2 FFT (seed=123) | ckpt35 | +13.6pp | 0.0026 |
-| seed-3 FFT (seed=456) | *training as of 2026-07-12* | — | — |
+| `r_task` | 0.343 | 24.1% | **78.9%** |
+| `r_fc` | 0.986 | 69.2% | 15.5% |
+| `r_cnt` | 0.498 | 3.5% | 5.5% |
+| `r_comp` | 0.936 | 3.3% | 0.1% |
 
-Paper claim: +13.3pp. We land on the same order of magnitude across three independent training runs. Ship the best-on-heldout checkpoint, not the last-step one.
+Variance decomposition is Var(total) = Σᵢ Cov(wᵢxᵢ, total), computed within group then pooled over 80 groups (mean 10.6 rollouts/group). The level share is the misleading statistic — a constant offset cancels in the GRPO advantage. `r_task` rounds 1–10 = 0.331, rounds 51–60 = 0.366, Welch t = +2.00 (df 261).
 
-## 4. finding 1 — training trajectory is bimodal on TRL, not monotone
+**Step-40 executor outage.** A remote-executor outage zeroed success for one step: 125 minutes of dead air, `r_task` = 0, largest advantage spread in the run (4.426 vs ~2.0 typical), grad norm 1.991. It did **not** propagate — steps 41–48 read 1.52/1.44/1.51/1.54/1.52/1.41/1.35/1.46, and the grad-norm rise starts at step 49. ckpt40 scored 39.3% (+5.7pp) on held-out eval, mid-pack. We considered restarting from ckpt35 and decided against it; the eval vindicated that.
 
-**Observation.** Across three runs (v8 LoRA, seed-1 FFT, seed-2 FFT), held-out lift over 60 GRPO steps is non-monotone: it rises through a mid-run peak, dips (occasionally to below baseline parity), and never fully recovers by step 60. The paper reports a monotone-to-60 curve.
+## Appendix C — reasoning
 
-**Peak index shifts with seed, shape does not.**
+**Baselines** (no-memory, Qwen3-8B, greedy). GPQA-Diamond reported aggregate-only per the dataset access condition.
 
-| run | peak ckpt | peak lift | final ckpt (60) lift |
+| dataset | ours | paper | delta |
 |---|---|---|---|
-| seed-1 FFT | 20 | +10.7pp | +5.7pp |
-| seed-2 FFT | 35 | +13.6pp | +4.3pp |
+| AIME24 | 73.3% (22/30) | 76.0 ± 6.9 | −2.7pp (0.4σ) |
+| AIME25 | 60.0% (18/30) | 71.1 ± 10.7 | −11.1pp (1.0σ) |
+| GPQA-Diamond | 59.6% (118/198) | 61.8 ± 1.1 | −2.2pp (2.0σ) |
+| **average** | **64.3%** | **69.6 ± 4.7** | **−5.3pp (1.1σ)** |
 
-Same recipe, different seeds, peak moves 15 checkpoints. Shape (rise → dip → mid-run peak → decline) is the reproducible property; the exact peak *index* is RNG-path-dependent. Practical consequence: ship the best-on-heldout checkpoint from a sweep, not `checkpoint-60`.
+Reasoning baselines reproduce within noise on the same executor stack that is 14pp low on ALFWorld — which is what localises the ALFWorld gap to the environment interaction rather than model quality.
 
-**Ruled out as causes** (each is a full 3-day training run + sweep, all against the same canonical baseline):
+**Same-domain curator training: null.** `reasoningfft`, DeepMath-103K topic-grouped (9 buckets), same recipe as the ALFWorld FFT runs, 60 steps, 49.5h. No checkpoint beats the 61.2% aggregate baseline; best is ckpt30 at −0.8pp. Decomposed, AIME peaks mildly (ckpt30 73.3% vs 66.7% baseline) while GPQA drops 3–7pp at every checkpoint, netting to noise. Confound: 661 HTTP 429s hit ~24% of training rollouts (181 deadline cuts / ~600 positions), vs <5% on the ALFWorld runs.
 
-- *LoRA parameterisation.* Full fine-tuning reproduces the bimodal shape at greater strength (+10.7pp vs +9.3pp). Not a LoRA artifact. Memory: `fft-bimodal-not-lora`.
-- *Type distribution (DIVERGENCES #0 half 1).* Training on the natural ALFWorld type frequencies (Pick-heavy) instead of uniform round-robin **kills** the lift entirely (best +5.7pp p=0.20). Uniform's balanced exposure to high-headroom types (Clean, Cool, Heat) is load-bearing. Memory: `natural-distribution-uniform-wins`.
-- *Within-group ordering (DIVERGENCES #0 half 2).* Soft easy→hard curriculum (paper Table 5, p↑=0.80, difficulty = expert-plan length) produces zero significant lift at any checkpoint (best +4.3pp p=0.36). Memory: `curriculum-no-lift-grouping-exonerated`.
-- *Missing KL anchor.* Not a U-shape (no deep sub-baseline trough). `beta=0.001` is present. Memory: `ushape-eval-missing-kl-anchor` rules out this class.
+**Cross-domain → ALFWorld** (`output/eval-reasoning-to-alfworld/`):
 
-**With both halves of the paper's grouping ablation falsified on our stack, grouping is fully exonerated as the driver.**
+| ckpt | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ΔSR | +7.1 | −2.9 | −0.7 | +0.7 | +0.7 | +8.6 | +0.7 | +3.6 | **−17.9** | **−15.0** | **−17.1** | **−14.3** |
+| p | .11 | .52 | 1.0 | 1.0 | 1.0 | .050 | 1.0 | .47 | **.0002** | **.0005** | **<.0001** | **.0005** |
 
-**Remaining suspect: TRL ≠ verl.** DIVERGENCES #14. Framework-level differences in advantage normalisation, sampling semantics (deferred by paper to verl-agent), and buffer handling remain untested. Testing requires a port to verl-agent, out of scope for this reproduction.
+## Appendix D — ablations
 
-## 5. finding 2 — the ALFWorld baseline gap is environment-specific
+![grouping ablations](figures/fig6_grouping_ablations.png)
 
-**Observation.** Same executor stack (Qwen3-8B via inference.sh, model-card decode, reasoning-on):
+Both halves of the paper's grouping ablation (Table 5), each a full 60-step run + 140-game sweep against the same baseline:
 
-| benchmark | ours (no-memory) | paper | delta |
-|---|---|---|---|
-| ALFWorld avg SR | 33.6% | 47.9% | **−14.3pp** |
-| AIME24 | 73.3% | 76.0 | −2.7pp (0.4σ) |
-| AIME25 | 60.0% | 71.1 | −11.1pp (1.0σ) |
-| GPQA-D | 59.6% | 61.8 | −2.2pp (2.0σ) |
+| variant | best arm | ΔSR | p | verdict |
+|---|---|---|---|---|
+| uniform round-robin (paper default) | ckpt35 | +13.6pp | 0.0026 | reference |
+| natural type frequencies | ckpt5 | +5.7pp | 0.20 | **null** |
+| easy→hard curriculum (p↑=0.80) | ckpt25/45 | +4.3pp | 0.36 | **null** |
 
-If the ALFWorld gap were a broad executor-quality problem, we'd see it on reasoning too. We don't. The gap is **specific to ALFWorld's ReAct interaction pattern**, not model quality.
+Uniform round-robin's balanced exposure to the low-baseline types (Clean/Cool/Heat) is load-bearing; the Pick-heavy natural distribution spends its budget where there is no headroom. The curriculum sweep covers ckpt5–45 only. Artifacts: `output/eval-fft-natural/`, `output/eval-fft-curriculum/`.
 
-**Trace-level evidence** on ALFWorld failure modes: the Qwen3-8B executor tends to role-play a physical microwave (`"I open the microwave and place the item inside"`) instead of emitting ALFWorld's atomic verb (`"heat X with microwave"`). Heat SR is 25% on 8B (matches the paper for that type) and unlocks to 56–62% on 32B. Prior audit (decode sweep, prompt Fig 9 verbatim, precision, retrieval, seeds) ruled out non-model-scale explanations. Memory: `executor-atomic-verb-gap`.
+Also ruled out earlier and not re-litigated here: missing KL anchor (β=0.001 is present, and the curve is not a U-shape), executor decode parameters (temp/top_p/top_k sweep, all p>0.5), retrieval, prompt wording (Fig 9 verbatim), and serving precision.
 
-**Consequence for the writeup.** All ALFWorld numbers should be read relative to their own baseline, not the paper's. Lift claims (McNemar) are unaffected because they compare arms drawn from the same executor stack.
+## Appendix E — the baseline gap
 
-## 6. discussion
+Our ALFWorld no-memory baseline is 33.6% vs the paper's 47.9% on nominally the same executor. Ruled out: prompt wording (paper Fig 9 verbatim), retrieval implementation, random seeds, serving precision (local bf16 ≈ remote), and executor decode parameters (full temp/top_p/top_k sweep, all arms p>0.5; GiGPO's top_p=1.0/top_k-off is *worse* for Qwen3).
 
-**What reproduces.** The core method: composite reward composition, Algorithm 1 group semantics, curator tool-calling, judge-scored content quality. The generalisation claim reproduces on the single tested pair (8B curator → 32B executor). The reasoning baselines reproduce within noise. Lift on ALFWorld reproduces at the same order of magnitude across three independent runs.
+Remaining suspect, from trace inspection: the ReAct/atomic-verb interaction. Qwen3-8B narrates physical actions (`"I open the microwave and place the item inside"`) instead of emitting ALFWorld's required atomic verb (`heat X with microwave`). Heat SR is 25% on 8B and unlocks to 56–62% on 32B, where the narration failure disappears. The gap concentrates on long-horizon multi-step types. Unresolved.
 
-**What doesn't reproduce.** The paper's monotone-to-60 curve. Three independent runs show mid-run peaks and post-peak regression; the effect is robust to LoRA/FFT, seed, type distribution, and curriculum ordering. This is a real reproducibility finding, not a bug — publishable as "TRL introduces small-batch GRPO instability that verl either doesn't have or handles differently."
+## Appendix F — divergences from the paper
 
-**Threats to validity.**
-- TRL ≠ verl framework confound present in every run; untested via port.
-- ALFWorld baseline gap is env-specific but adds noise to any absolute claim; McNemar-paired lifts are unaffected.
-- Bimodality established on n=2 seeds; n=3 in progress.
-- Cross-executor transfer numbers are n=1 per arm; ~±4pp baseline variance means "beats paper" is not a defensible claim, "at parity" is.
-- Closed-loop reasoning eval not yet run.
-- WebShop not attempted.
+| # | divergence | status |
+|---|---|---|
+| 0 | task grouping (distribution + ordering) | **closed** — both halves null, grouping exonerated |
+| 1 | 8 H100 + LoRA vs 16 H100 + FFT | closed — FFT runs are the definitive ones |
+| 2 | vLLM colocate serving | closed |
+| 6 | Algorithm 1 supersedes the earlier Path B design | closed |
+| 7 | per-rollout ephemeral skill repo | closed |
+| 9 | `max_completion_length` | closed |
+| 11 | transfer-probe `r_task` | closed — superseded |
+| 14 | TRL ≠ verl framework confound | **closed** — verl/GiGPO reproduces the oscillation |
+| 13 | 8B ALFWorld baseline 14pp below paper | **open** — see Appendix E |
+| — | WebShop benchmark | **not attempted** |
 
-## 7. how the code is organised
+Full detail and history in [`../DIVERGENCES.md`](../DIVERGENCES.md); dated run-by-run log in [`../JOURNAL.md`](../JOURNAL.md).
+
+## Appendix G — reproducing this
 
 Training:
 
-- `scripts/train_algo1.py`, `run_algo1_fft.sh`, `run_algo1_v8_lora_kl.sh`
-- Configs: `configs/alfworld_8xh100_algo1_fft.yaml`, `configs/alfworld_8xh100_algo1_v8_lora_kl.yaml`
-- Sharding: `configs/accelerate_zero3.yaml`
+- ALFWorld (TRL): `scripts/train_algo1.py`, `run_algo1_fft.sh`, `run_algo1_v8_lora_kl.sh`
+- ALFWorld (verl/GiGPO): `agent_system/environments/env_package/skillos/` in the verl fork
+- Reasoning: `scripts/train_reasoning.py`, `run_reasoning_fft.sh`
+- Configs: `configs/alfworld_8xh100_algo1_fft.yaml`, `configs/reasoning_8xh100_algo1_fft.yaml`, `configs/accelerate_zero3.yaml`
 
-Held-out eval and sweeps:
+Eval and sweeps:
 
-- `scripts/eval_streaming_curation.py --mode {no_memory, closed_loop}` — ALFWorld
-- `scripts/eval_reasoning.py --mode no_memory --dataset {aime24, aime25, gpqa}` — reasoning
-- `scripts/compare_eval_arms.py` — paired-McNemar comparator
-- `scripts/{natural, curriculum, transfer}_sweep_supervisor.sh` — storm-resilient sweep runners with concurrency-matched executor gates
+- `scripts/eval_streaming_curation.py --mode {no_memory,closed_loop}` — ALFWorld
+- `scripts/eval_reasoning.py --mode no_memory --dataset {aime24,aime25,gpqa}`
+- `scripts/compare_eval_arms.py` — the paired-McNemar comparator behind every table here
+- `scripts/*_sweep_supervisor.sh` — storm-resilient sweep runners (API gate → GPU-pinned waves → storm detect → comparator)
+- `scripts/make_report_figures.py` — regenerates every figure from the artifacts
 
-Every result table in this report can be regenerated from the JSONLs under `output/eval-*/` by pointing `compare_eval_arms.py` at the same arms and the canonical `output/eval-pathbv4/no_memory.jsonl` baseline. Memory notes and skills are held under the local `belt` knowledge store (path `/home/ubuntu/.claude/projects/-home-ubuntu-skillos/memory/`).
+Any table in this report can be recomputed by pointing `compare_eval_arms.py` at the same arms plus the canonical `output/eval-pathbv4/no_memory.jsonl`.
 
-## 8. what would move this next
+## References
 
-- **N=3 seed-3 FFT** — locks the bimodality shape claim, in flight as of 2026-07-12.
-- **verl-agent port** — the only way to test the TRL ≠ verl hypothesis directly. Real engineering, ~1 week.
-- **Closed-loop reasoning eval** on our best curators — tests whether skills learned from ALFWorld transfer to math/GPQA (paper's cross-domain claim). Cheap once seed-3 frees the box.
-- **WebShop** — third benchmark, ~1 week of engineering.
-
-## 9. references
-
-- Ouyang et al., 2026. SkillOS: Learning Skill Curation for Self-Evolving Agents. [arXiv:2605.06614](https://arxiv.org/abs/2605.06614)
-- Shao et al., 2024. Group Relative Policy Optimization. [arXiv:2402.03300](https://arxiv.org/abs/2402.03300)
-- verl-agent / GiGPO, 2025. [arXiv:2505.10978](https://arxiv.org/abs/2505.10978) — executor-side harness the paper defers to
+- Ouyang et al., 2026. *SkillOS: Learning Skill Curation for Self-Evolving Agents.* [arXiv:2605.06614](https://arxiv.org/abs/2605.06614)
+- Shao et al., 2024. *Group Relative Policy Optimization.* [arXiv:2402.03300](https://arxiv.org/abs/2402.03300)
+- Feng et al., 2025. *verl-agent / GiGPO.* [arXiv:2505.10978](https://arxiv.org/abs/2505.10978)

@@ -1,6 +1,14 @@
 # SkillOS: What's behind the "8B curator beats Gemini-2.5-Pro" claim?
 
-**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. Three findings don't match the paper: (1) the training curve is non-monotone-with-post-peak-regression, reproducible across three seeds, peak indices at ckpt 20 / 35 / 55; (2) the on-8B ranking is decorrelated from 32B transfer performance — a barely-trained ckpt5 transfers +13.6pp to 32B while the on-8B best (ckpt55) transfers only +2.1pp; (3) cross-domain reasoning transfer swings +6.7pp to −8.3pp across curators from the same training recipe, so "SkillOS produces general skill curators" is a per-seed lottery, not a universal claim. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
+> **DRAFT — predates the final report. Do not publish as-is (2026-08-10).**
+> This draft was written before the verl real-ALFWorld run and the
+> reasoning→ALFWorld transfer sweep completed. It is missing the two most
+> important results — the family-wide multiplicity reckoning (50 checkpoint arms,
+> nothing survives correction) and the significantly *negative* cross-domain
+> transfer (−14 to −18pp, p ≤ 0.0005) — and it still frames TRL≠verl as an open
+> confound, which is now closed. Rebuild from `docs/repro_report.md`.
+
+**TL;DR:** SkillOS is a technique for training a small "curator" model that maintains a markdown skill repo for a frozen executor. Google + UIUC + MIT dropped the paper with a striking claim: an 8B-trained curator outperforms Gemini-2.5-Pro at skill curation across every benchmark. No official code. We reproduced the pipeline on TRL instead of verl, on 8 H100s instead of 16, across three benchmarks: ALFWorld, AIME24/25, GPQA-Diamond. The core generalisation claim reproduces — an 8B-trained LoRA curator drives a 32B executor to 62.1% on ALFWorld valid_seen (+12.9pp vs no-memory, McNemar p=0.0064), above the paper's headline 61.2%. Four findings don't match the paper: (1) the ALFWorld training curve is non-monotone-with-post-peak-regression, reproducible across three seeds, peak indices at ckpt 20 / 35 / 55; (2) the on-8B ranking is decorrelated from 32B transfer performance — a barely-trained ckpt5 transfers +13.6pp to 32B while the on-8B best (ckpt55) transfers only +2.1pp; (3) cross-domain ALFWorld→reasoning transfer swings +6.7pp to −8.3pp across curators from the same training recipe, so "SkillOS produces general skill curators" is a per-seed lottery, not a universal claim; (4) reasoning curator training (DeepMath-103K, 60 steps, 49.5h) is a null result on same-domain eval — no checkpoint beats baseline on aggregate, with AIME and GPQA pulling in opposite directions. Full training + eval code, three-benchmark harness, and a storm-resilient sweep supervisor are on GitHub. This is peer review as a gift, not a "we did SkillOS better" post.
 
 The article is easier to read on GitHub: [github.com/belt-sh/skillos](https://github.com/belt-sh/skillos)
 
@@ -160,6 +168,29 @@ The fix is a **concurrency-matched probe gate**. Before launching a sweep, probe
 
 Neither of those is a SkillOS problem. Both are the kind of thing you only learn by leaving a 3-day training run unattended.
 
+## New finding: reasoning curator training is a null result
+
+We ran the paper's reasoning training path: DeepMath-103K, same recipe as our ALFWorld FFT runs (60 steps, |G|=10, ZeRO-3, beta=0.001, Qwen3-32B judge). 49.5 hours on 8×H100. All 12 checkpoints saved, clean exit.
+
+Then we swept every checkpoint through closed-loop curation on AIME24+25 (60 problems) and GPQA-Diamond (198 problems). No-memory baseline: 158/258 = 61.2%.
+
+| ckpt | aggregate | AIME | GPQA-D |
+|---|---|---|---|
+| baseline | 61.2% | 66.7% | 59.6% |
+| ckpt30 (best) | 60.5% (−0.8pp) | 73.3% | 56.6% |
+| ckpt55 | 61.2% (+0.0pp) | 68.3% | 59.1% |
+| ckpt60 | 55.8% (−5.4pp) | 66.7% | 52.5% |
+
+**No checkpoint beats the baseline on aggregate.** The sub-benchmark picture explains why: AIME shows a genuine mild peak at ckpt20-30 (+5-7pp over the 66.7% baseline), but GPQA-Diamond consistently drops 3-7pp below its 59.6% baseline at every single checkpoint. The GPQA regression swamps the AIME gain.
+
+Two confounds before calling this a clean null:
+
+First, **24% of training rollouts hit HTTP 429 errors** from inference.sh during the run — 661 rate-limit responses, 181 DEADLINE CUTs out of ~600 total rollout positions. That's a meaningfully noisier reward signal than any of the ALFWorld FFT runs (<5% cuts). If a quarter of your `r_task` values are noise-masked zeros, it's hard for GRPO to learn a stable gradient.
+
+Second, the **AIME vs GPQA antagonism** is interesting on its own. The curator appears to learn skills that help with calculation-heavy numeric reasoning (AIME) at the expense of conceptual science reasoning (GPQA). The paper reports aggregate reasoning numbers without per-dataset training curves, so we can't compare.
+
+The **cross-domain reasoning→ALFWorld direction** — the paper's headline +13.3pp claim — is in flight as of this writing. If the reasoning curator transfers to ALFWorld despite the same-domain null, that's a story about generalised skill-writing craft vs domain-specific overfitting. If it doesn't, the reasoning training path may genuinely be null on this stack.
+
 ## What actually got shipped
 
 Everything's in the repo:
@@ -175,15 +206,17 @@ Runs on 8×H100 with the executor and judge on inference.sh, no local vLLM requi
 
 ## What I'd want next
 
-The paper's cross-domain claim — a reasoning-trained curator transferring to ALFWorld with +13.3pp — is the most striking generalisation number in the paper and we haven't tested it yet. Closed-loop reasoning training is a ~3-day run once seed-3 (n=3 for bimodality) finishes. That's the next thing I'd spend GPU time on if the goal is to close the paper's headline claim beyond just the executor axis.
+The **reasoning→ALFWorld cross-domain transfer** is running right now. That's the paper's strongest claim (+13.3pp) and the test that will determine whether the same-domain reasoning null is a "didn't learn anything useful" null or a "learned general skill-writing craft that doesn't show up on the training distribution" null. Those are very different conclusions.
 
-The verl port is real work and would settle the last open hypothesis (bimodality driven by framework). Someone else's follow-up.
+A **clean reasoning re-run** with a local executor (no 429 rate limits) would eliminate the training noise confound. If the same-domain null persists without the 24% reward corruption, the result is cleaner.
+
+The verl port is real work and would settle the last open hypothesis (non-monotone trajectory driven by framework). Someone else's follow-up — divergences #0 through #11 are all resolved or exonerated, and #14 (TRL ≠ verl) is the only one left standing.
 
 And I'd want to see this method run on a domain that isn't a text-adventure environment or a math benchmark — something with an open-ended skill space and a checkable reward. Tool-use, coding tasks, browser automation. That's where "skills as markdown, curator as trainable meta-model" starts to matter for real applications. ALFWorld is a proof of the mechanism, not a proof of the ceiling.
 
 ## Conclusion
 
-SkillOS works. The method reproduces qualitatively across three benchmarks. The transfer claim reproduces at parity on a single run. The training-curve shape doesn't reproduce, and the paper's own grouping ablation is null on our stack — both point at TRL ≠ verl at the framework layer, which we haven't tested.
+SkillOS works on ALFWorld. The method reproduces qualitatively, the transfer claim reproduces at parity on a single run, and the lift is robust across N=3 seeds (+10-14pp peaks, all significant). The training-curve shape doesn't reproduce (non-monotone vs the paper's monotone), and the paper's own grouping ablation is null on our stack — both point at TRL ≠ verl at the framework layer, which we haven't tested. Reasoning curator training is a null result on same-domain eval — whether that's a real finding or a training-noise artifact from the 24% 429 rate is unresolved.
 
 Nobody built a new foundation model here — not the paper's authors, not us. What SkillOS actually is: **a training recipe for a small executor-grounded curator, plus a runtime pattern of storing agent skills as markdown files and retrieving them via BM25.** The recipe reproduces. The runtime pattern is what belt and Anthropic and a growing pile of agent frameworks are already using.
 
@@ -201,4 +234,4 @@ Running narrative including the dead ends: [JOURNAL.md](https://github.com/belt-
 
 Every deviation from the paper, categorised: [DIVERGENCES.md](https://github.com/belt-sh/skillos/blob/main/DIVERGENCES.md)
 
-This research was conducted between May 26 and July 12, 2026, using TRL 1.4 + DeepSpeed ZeRO-3 + vLLM colocate on 8× H100, with `openrouter/qwen3-8b` and `openrouter/qwen3-32b` as executors and `openrouter/qwen3-32b` as the judge, all via inference.sh.
+This research was conducted between May 26 and July 20, 2026, using TRL 1.4 + DeepSpeed ZeRO-3 + vLLM colocate on 8× H100, with `openrouter/qwen3-8b` and `openrouter/qwen3-32b` as executors and `openrouter/qwen3-32b` as the judge, all via inference.sh.

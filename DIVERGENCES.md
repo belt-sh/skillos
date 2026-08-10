@@ -23,7 +23,9 @@ Order matters: things at the top affect results most.
 > The paper's own ablation (Table 3) says grouping is the single most important
 > design choice; we diverge from it in two un-tested ways (uniform type
 > distribution + no curriculum). Framework is **TRL, not verl** (#14) — a
-> confound present in every run.
+> confound present in every run, though as of 2026-07-29 a verl port has ruled
+> it out as the *bimodality* driver (the oscillation reproduces in verl, peaking
+> at the same ckpt35 index).
 
 ---
 
@@ -39,7 +41,8 @@ Order matters: things at the top affect results most.
 > ckpt35 (inside this window) so a hidden curriculum peak in 50–60 is very
 > unlikely; not resuming. **With distribution AND ordering both falsified,
 > grouping is fully exonerated as the driver of our bimodal trajectory or lift
-> gap. The only surviving suspect is TRL ≠ verl (#14).** Sweep artifacts:
+> gap. The only surviving suspect was TRL ≠ verl (#14) — now also ruled out by
+> the 2026-07-29 verl port, leaving the bimodality intrinsic to the method.** Sweep artifacts:
 > `output/eval-fft-curriculum/comparison_canonical.txt`.
 
 > **Update 2026-07-03 — natural-distribution run resolves the distribution half,
@@ -254,23 +257,29 @@ This is the biggest deviation. Worth splitting into two parts.
 - **Impact:** correctness drift when curator starts emitting ops in volume.
 - **Status:** `resolved` — per-rollout ephemeral repo (Path B)
 
-## 8. Reasoning + WebShop benchmarks not built
+## 8. WebShop benchmark not built (reasoning IS built — RESOLVED 2026-07-20)
 
 - **Paper:** trains and evaluates on three domains — ALFWorld, DeepMath-103K
   + GPQA-Diamond (reasoning), WebShop. Reports Tables 1-3 across all of them.
-- **Ours:** only ALFWorld is wired. Reasoning + WebShop have:
-  - prompt templates in `curator/prompts.py` (REASONING_EXECUTOR,
-    REASONING_CORRECTNESS_JUDGE)
-  - placeholder `data/grouping.py::group_reasoning_tasks`
-  - declared extras in `pyproject.toml` (`sympy` for reasoning,
-    `stable-baselines3` for webshop)
-  - **no environment wrappers, no training configs, no dataset loaders**
-- **Why:** scope — reproducing ALFWorld first as v0.1. Reasoning + WebShop
-  scheduled for v0.2 in the README roadmap.
-- **Impact:** Cannot reproduce the paper's cross-domain transfer claim
-  ("+13.3% on ALFWorld from reasoning training") or the three-benchmark
-  averages. Per-domain ALFWorld numbers are still comparable.
-- **Status:** `temporary` (v0.2 work)
+- **Ours:** ALFWorld and reasoning are both fully wired; WebShop is not.
+  - **Reasoning: DONE.** `skillos/reasoning/{env,train_data,datasets,prompts,grading}.py`,
+    `configs/reasoning_8xh100_algo1_fft.yaml`, `scripts/train_reasoning.py`,
+    `scripts/eval_reasoning.py`, `scripts/reasoning_sweep_supervisor.sh`,
+    `scripts/reasoning_to_alfworld_sweep.sh`. A full 60-step DeepMath-103K
+    curator run completed (49.5h) and both the same-domain 12-arm sweep and the
+    cross-domain →ALFWorld sweep are done. Results in `docs/repro_report.md`
+    Appendix C: same-domain is a **null** (best ckpt30, −0.8pp vs the 61.2%
+    aggregate baseline), and cross-domain transfer is **significantly negative**
+    (ckpt45 −17.9pp p=0.0002 … ckpt60 −14.3pp p=0.0005) — the opposite sign to
+    the paper's +13.3pp claim, and the most robust effect in the project.
+  - **WebShop: still not built.** No environment wrapper, training config, or
+    dataset loader. Only the `stable-baselines3` extra in `pyproject.toml`.
+- **Why:** scope. ALFWorld first, then reasoning; WebShop deprioritised once the
+  cross-domain claim could be tested via the reasoning→ALFWorld direction.
+- **Impact:** the paper's cross-domain transfer claim IS now testable and does
+  not reproduce (see above). The three-benchmark averages remain out of reach
+  without WebShop.
+- **Status:** `partial` — reasoning resolved; WebShop outstanding.
 
 ## 9. `max_completion_length: 8192` (LoRA pilot) instead of 4096
 
@@ -387,7 +396,43 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
   data sampler, and optimizer/sharding stack. This is a leading candidate (with
   #0 and small effective batch) for the **bimodal trajectory** that the paper does
   not report. Don't oversell repro fidelity — TRL ≠ verl is present in every run.
-- **Status:** `forced` (framework choice), flagged as a known confound.
+- **Status:** `forced` (framework choice), flagged as a known confound —
+  **but NO LONGER a candidate explanation for the bimodal trajectory (2026-07-29).**
+
+> **Update 2026-08-10 — verl port RULES OUT the framework as the bimodality
+> driver.** We ported SkillOS onto verl-agent (GiGPO) with real ALFWorld
+> episodes (live `AlfredTWEnv` per group, deterministic per-position seeding,
+> ground-truth `score > 0` success, judged `r_cnt`, BM25 retrieval per paper
+> §3.2, executor decode matching the TRL/paper config), trained 60/60 steps
+> over 10.4 days, and swept all 12 checkpoints against the canonical 33.6%
+> baseline. **The oscillating non-monotone shape reproduces in verl**: the
+> curve crosses its own baseline four times, peaks at ckpt30 (40.7%, +7.1pp,
+> p=0.099), and returns to baseline by ckpt60 (+0.7pp).
+>
+> With #0 already closed on both halves (natural distribution null, curriculum
+> null), **no divergence remains that explains the oscillation: it is intrinsic
+> to the method at this effective batch size.** What carries the result is the
+> *shape* replicating across two independent RL frameworks — not any single
+> p-value. Nothing in the verl sweep survives Bonferroni over 12 arms
+> (threshold 0.0042), and across all five ALFWorld sweeps (50 arms) nothing
+> survives a family-wide threshold of 0.001 either; see `docs/repro_report.md`
+> Finding 1. The peak checkpoint index does **not** agree across runs — TRL
+> seeds peak at ckpt 20/30/35/55 and verl at ckpt30 — which is itself the
+> finding: peak index is RNG-path-dependent.
+>
+> The reward machinery was verified healthy on this run rather than assumed:
+> within GRPO groups `r_task` supplies 78.9% of the reward variance the
+> advantage actually sees (the composite *level* is 69% `r_fc`, but a constant
+> offset cancels in a group-centred advantage), and all 80 logged groups had
+> non-zero `r_task` variance — so the group-collapse failure mode that
+> invalidated the v5–v7 runs is absent. Task reward still only moved +0.035
+> (95% CI ±0.034) over 60 rounds while policy entropy collapsed 0.139 → 0.035.
+>
+> Sweep artifacts: `output/eval-verl-gigpo-real/comparison_canonical.txt`.
+> Checkpoints: `/mnt/nvme/output/verl-skillos-real-checkpoints` (12 × 92G FSDP),
+> merged HF at `/mnt/nvme/output/verl-merged-hf-real`. Note the `-real-` infix:
+> every post-run script defaulted to the older path and failed *silently*
+> rather than erroring — verify resolved paths before trusting any verl output.
 
 ## Open audit items (verify next time we touch them)
 

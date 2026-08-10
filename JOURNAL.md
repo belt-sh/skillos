@@ -15,6 +15,107 @@ See also: `DIVERGENCES.md` (point-by-point deltas from the paper) and
 
 ---
 
+## verl port — the bimodality is NOT a TRL artifact (2026-07-29)
+
+> **SUPERSEDED 2026-08-10.** The sweep in this entry measured the first verl
+> environment, which had not yet been wired to real ALFWorld episodes (executor
+> prompted with a task *description*, LLM-verdict success, repo-size `r_cnt`,
+> set-overlap retrieval). Those checkpoints are deleted and these numbers are
+> **not** the project's verl result. The conclusion below — the oscillation is
+> not a TRL artifact — is upheld by the real-environment rerun, but on different
+> numbers and without the peak-index agreement claimed here. See
+> "verl real-ALFWorld run" below and `docs/repro_report.md`.
+
+**The last suspect for the non-monotone trajectory is dead.** We ported SkillOS
+onto verl-agent (GiGPO), trained 60/60 steps, and swept all 12 checkpoints
+against the canonical 33.6% no-memory baseline. The oscillating shape reproduces
+in a *different framework*, and it peaks at the **same checkpoint index** as the
+TRL seed-2 FFT run.
+
+| ckpt | SR | delta | p | | ckpt | SR | delta | p |
+|---|---|---|---|---|---|---|---|---|
+| no_memory | 33.6% | — | — | | 30 | 35.0% | +1.4% | 0.839 |
+| 5 | 33.6% | +0.0% | 1.000 | | **35** | **43.6%** | **+10.0%** | **0.016** |
+| 10 | 40.7% | +7.1% | 0.076 | | 40 | 32.1% | -1.4% | 0.815 |
+| 15 | 40.0% | +6.4% | 0.136 | | 45 | 37.9% | +4.3% | 0.286 |
+| 20 | 35.7% | +2.1% | 0.701 | | 50 | 32.9% | -0.7% | 1.000 |
+| 25 | 37.1% | +3.6% | 0.458 | | 55 | 37.9% | +4.3% | 0.362 |
+|   |   |   |   | | 60 | 32.9% | -0.7% | 1.000 |
+
+**Why this matters.** DIVERGENCES #0 closed both halves earlier (natural
+distribution null, curriculum null), leaving TRL != verl (#14) as the only
+surviving explanation for the bimodal trajectory the paper never reports. It is
+now ruled out. The oscillation is **intrinsic to the method at this effective
+batch size**, not a framework artifact, not the type distribution, not
+within-group ordering.
+
+**The peak-index agreement is the strongest part of the result.** verl peaks at
+ckpt35 (+10.0pp, p=0.016); TRL seed-2 FFT peaked at ckpt35 (+13.6pp, p=0.0026).
+Independent frameworks, same index, same magnitude class. Seed-1 peaked at
+ckpt20 (+10.7pp), so the peak *location* still moves with seed — but it is
+consistently mid-training, never at the end.
+
+**Final-checkpoint evaluation remains the trap.** ckpt60 = -0.7pp, i.e. exactly
+baseline. Training-time `episode/success_rate` was flat all run (mean 0.107,
+sd 0.055, first-half 0.115 vs second-half 0.099) while intermediate checkpoints
+carried real lift. Anyone evaluating only the last checkpoint would conclude the
+method does nothing.
+
+### Statistical honesty
+
+- **ckpt35 does NOT survive multiple-comparison correction.** 12 arms tested;
+  Bonferroni threshold is 0.05/12 = 0.0042, and p=0.016 does not clear it. In
+  isolation this is one marginal hit out of twelve — about what chance yields.
+  What elevates it is the *independent replication at the same index* in TRL,
+  which is corroboration rather than a fresh fishing expedition.
+- Per-arm SE at n=140, p~0.36 is ~4.1pp. Much of the small wiggling (32-38%) is
+  noise; ckpt35 sits ~2.4 SE above baseline.
+- Baseline validated: no_memory came out **47/140 = 33.6%**, matching the
+  documented canonical value exactly — independent confirmation that merged verl
+  checkpoints evaluate correctly (a path/format bug would not reproduce it).
+- Peak 43.6% is still below the paper's 47.9% for 8B, consistent with the
+  unresolved atomic-verb gap, not a new effect.
+
+### Scope limit — do not over-read the levels
+
+The verl env is the **simplified scaffold**: the executor is prompted with a task
+description rather than running real multi-step ALFWorld episodes, and the judge
+returns a SUCCESS/FAILURE verdict rather than the paper's content-quality score.
+The *eval* is the real harness on 140 held-out `valid_seen` games, so the
+comparison is sound — but it measures a curator trained in that scaffold. The
+**trajectory shape** is the transferable finding; the absolute numbers are not
+paper-comparable.
+
+### Operational notes (cost us ~6h)
+
+- **verl saves FSDP shards, not HF format.** Each checkpoint needs
+  `scripts/model_merger.py merge --backend fsdp` before the eval harness can
+  load it (16GB each, ~25s). See `scripts/verl_merge_all.sh`.
+- **A DNS resolution loop between systemd-resolved and tailscaled** was
+  generating ~37k QPS for a single hostname (373k pkts/10s, only 30 escaping
+  upstream) and consuming 3-5 cores; tailscaled RSS reached 1815GB and tripped
+  Ray's node-OOM killer, killing the first attempt at step 19. Root cause was
+  mutual delegation: resolv.conf -> tailscale, resolved's global upstream ->
+  tailscale, tailscale forwarding non-tailnet names -> 127.0.0.53. Fixed by
+  `tailscale set --accept-dns=false` + repointing resolv.conf at the
+  systemd-resolved stub. **MagicDNS is now off** (peer names don't resolve; peer
+  IPs do).
+- **Fixing DNS mid-run corrupted 4 steps.** glibc caches resolver config
+  per-process, so workers started before the change kept querying a resolver
+  that no longer answered: 361 API_ERROR, steps 49-52 at *exactly* 0.000
+  success. Discarded by resuming from ckpt45; the contaminated ckpt50 is kept at
+  `output/verl-quarantine-dns-corrupted/`. Lesson: **pause training before any
+  DNS change**, and treat "success_rate exactly 0.000 for consecutive steps" as
+  a systemic-failure signature, never noise.
+- **Transient API errors must not be scored as task failures.** The env now
+  retries transient failures 4x with jittered backoff and *excludes* the
+  position from `r_task` instead of grading an empty response as a failed task.
+  Before this fix, one DNS blip fabricated negative curation signal.
+
+Artifacts: `output/eval-verl-gigpo/comparison_canonical.txt`,
+12 merged checkpoints at `/mnt/nvme/output/verl-merged-hf/`,
+wandb run `okaris/skillos/run-20260728_164957-4eqcb5he`.
+
 ## Cross-domain reasoning transfer + expanded 32B seed-3 sweep (2026-07-15)
 
 Two experiments queued after seed-3 sweep freed the box. Both surprising.
@@ -736,3 +837,105 @@ training repo and measure" eval is invalid under Path B.
   Path B learns but falls short of the paper.
 </content>
 </invoke>
+
+---
+
+## verl real-ALFWorld run: the definitive verl result, and the multiplicity reckoning (2026-08-10)
+
+Ten and a half days, 60/60 GRPO steps, ~15,100 remote executor calls per step.
+This is the framework-faithful run: live `AlfredTWEnv` episodes per group,
+deterministic per-position seeding, ground-truth `score > 0` success, judged
+`r_cnt`, BM25 retrieval, paper-matched executor decode. The earlier verl sweep
+(2026-07-29 entry above) measured the pre-real scaffold and is superseded.
+
+12 arms, 140 paired `valid_seen` games, McNemar vs the canonical 33.6% baseline:
+
+| ckpt | SR | delta | p | | ckpt | SR | delta | p |
+|---|---|---|---|---|---|---|---|---|
+| no_memory | 33.6% | — | — | | 35 | 38.6% | +5.0% | 0.265 |
+| 5 | 37.1% | +3.6% | 0.500 | | 40 | 39.3% | +5.7% | 0.201 |
+| 10 | 39.3% | +5.7% | 0.201 | | 45 | 37.1% | +3.6% | 0.500 |
+| 15 | 32.1% | -1.4% | 0.856 | | 50 | 33.6% | +0.0% | 1.000 |
+| 20 | 39.3% | +5.7% | 0.152 | | 55 | 40.0% | +6.4% | 0.150 |
+| 25 | 34.3% | +0.7% | 1.000 | | 60 | 34.3% | +0.7% | 1.000 |
+| **30** | **40.7%** | **+7.1%** | **0.099** | | | | | |
+
+**The oscillating shape reproduces** — the curve crosses its own baseline four
+times and returns to baseline by ckpt60. That closes DIVERGENCES #14: the
+non-monotone trajectory is intrinsic to the method at this effective batch size,
+not a TRL artifact. What does *not* replicate is the peak index: TRL seeds peak
+at ckpt 20/30/35/55, verl at ckpt30. Peak index is RNG-path-dependent, which is
+itself the finding.
+
+**The uncomfortable part.** Adding this sweep brings us to 50 checkpoint arms
+across five runs against one baseline. Bonferroni puts the bar at p < 0.001. The
+best arm in the entire project is TRL seed-2 ckpt35 at p = 0.0026. **No
+same-executor ALFWorld lift survives family-wide correction.** Every individual
+run looks like it found something; the family says we found a noisy oscillation
+with a mean somewhere above zero. This is the single most important thing to say
+out loud in the writeup, and it is why the report leads with the sweep rather
+than a headline number.
+
+**Checked the reward machinery rather than assuming it.** Given a weak result the
+first suspicion is a broken reward. It isn't. Decomposing 850 logged rollouts:
+
+| component | mean | share of reward *level* | share of *within-group variance* |
+|---|---|---|---|
+| `r_task` | 0.343 | 24.1% | **78.9%** |
+| `r_fc` | 0.986 | 69.2% | 15.5% |
+| `r_cnt` | 0.498 | 3.5% | 5.5% |
+| `r_comp` | 0.936 | 3.3% | 0.1% |
+
+The level share is the tempting-but-wrong statistic — it looks like the composite
+is 69% a near-saturated function-call-validity term, which would be damning. But
+GRPO centres advantages within each group, so a near-constant offset cancels and
+only within-group variance reaches the gradient. There `r_task` supplies 79%.
+All 80 logged groups had non-zero `r_task` variance, so the group-collapse bug
+that invalidated v5–v7 is genuinely absent. (I initially wrote up the level
+share as the finding; it was wrong and the variance decomposition is the correct
+analysis.)
+
+So the optimiser was chasing the right thing and still only moved training task
+reward +0.035 (95% CI ±0.034) over 60 rounds, with train success flat
+(0.170 → 0.167). What *did* move: policy entropy collapsed 0.139 → 0.035 and
+grad norm climbed 1.40 → 2.40, the rise starting at step 49. The curator
+sharpens onto a fixed skill-writing style while its effect on the executor
+plateaus — a coherent mechanism for "peak mid-run, drift after".
+
+**Step-40 outage.** A remote-executor outage zeroed one step's success: 125
+minutes of dead air, largest advantage spread in the run (4.426 vs ~2.0). We
+debated restarting from ckpt35 (~95h) versus finishing (~34h) and chose to
+finish. Vindicated: ckpt40 scored 39.3% (+5.7pp), mid-pack. It did not
+propagate — steps 41-48 are normal and the grad-norm rise starts at 49. Also
+worth noting the health check missed it, because `SUCCESS_RATE_ZERO` requires
+three consecutive zeroed steps.
+
+**Three stale-path traps, all silent.** The real run writes to
+`verl-skillos-real-checkpoints`; every post-run script defaulted to the old
+`verl-skillos-checkpoints`, which still existed. `verl_supervisor.sh` read
+ckpt=0 and logged `STALLED (1/3)` on a completed 60/60 run — left alone it would
+have relaunched an 11-day job. `verl_merge_all.sh` and
+`verl_sweep_supervisor.sh` would each have re-emitted the OLD scaffold's results
+under a new name via their "already done, skip" branches. None of them error;
+they all print success. A `VERL_SWEEP_COMPLETE` line proves nothing about which
+scaffold was measured. All three now take env-overridable paths defaulting to
+`-real-`.
+
+**Report written.** `docs/repro_report.md` restructured to a two-page main body
+(five findings) plus appendices, with figures regenerated from artifacts by
+`scripts/make_report_figures.py`. Headline set: the method works but the effect
+is small and largely a checkpoint-selection artifact; the reward machinery is
+healthy; curator quality does not transfer across executor scale (pooled
+r = −0.20, and the best 32B curator is seed-3 **ckpt5** at 62.9%, +13.6pp);
+and cross-domain reasoning→ALFWorld transfer reverses sign versus the paper
+(−14 to −18pp, p ≤ 0.0005 — the only results that survive correction
+comfortably).
+
+Artifacts: `output/eval-verl-gigpo-real/comparison_canonical.txt`,
+`/mnt/nvme/output/verl-skillos-real-checkpoints` (12 × 92G FSDP),
+`/mnt/nvme/output/verl-merged-hf-real` (12 × 16G HF),
+wandb `run-20260730_081941-7rm65scp`.
+
+**Still open:** WebShop entirely; the 14pp 8B ALFWorld baseline gap
+(DIVERGENCES #13); GPQA content scrub before the repo goes public; HF upload of
+both frameworks' checkpoints.
