@@ -434,6 +434,38 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
 > every post-run script defaulted to the older path and failed *silently*
 > rather than erroring — verify resolved paths before trusting any verl output.
 
+## 15. verl run used effective batch 64, not the paper's 32 (UNFORCED — found 2026-08-10)
+
+- **Paper:** batch size **32**, GRPO group size **8** (Table 4, all three domains).
+- **Ours (TRL):** `per_device=2 × grad_accum=2 × 8 processes = 32`. **Matches.**
+- **Ours (verl):** `data.train_batch_size=8` × `env.rollout.n=8` = **64**.
+  **Double the paper.**
+- **Why it happened:** `examples/gigpo_trainer/run_skillos.sh:45` justifies the
+  value inline — `train_data_size=8 # groups per step (8 groups × 8 GRPO
+  rollouts = 64 effective batch, divisible by n_gpus=8)`. But verl's actual
+  constraint is `assert real_train_batch_size % n_gpus == 0` where
+  `real_train_batch_size = train_batch_size × rollout.n`
+  (`verl/trainer/ppo/ray_trainer.py:470`). With `train_batch_size=4` that is
+  `4 × 8 = 32`, which satisfies the assertion and matches the paper. **The
+  constraint cited in the comment did not force the value.** It was rounded up
+  to "one group per GPU" without checking, and never revisited.
+- **Cost:** ~2× the rollout volume per step. The run took 10.2 days; at the
+  paper's batch it would have been roughly 5. This is the single most expensive
+  unforced mistake in the reproduction.
+- **Impact on results — none negative, and arguably positive.** The headline use
+  of the verl run is that the non-monotone checkpoint trajectory reproduces
+  outside TRL. It does, at batch 64, while TRL reproduces it at batch 32. So the
+  oscillation is robust to a 2× batch change as well as to the framework change,
+  which is a *stronger* claim than the one we set out to test. The honest cost is
+  that the TRL↔verl comparison now varies two variables, so #14 should be read as
+  "not a framework artifact AND not a batch-size artifact" rather than as a clean
+  single-variable test. Small-effective-batch gradient noise is therefore also
+  ruled out as the oscillation's driver.
+- **Status:** `bug, not repeated` — record kept because the wall-clock lesson
+  generalises: verify that a stated divisibility constraint actually binds the
+  value you chose, and normalise cost to episodes rather than steps before
+  accepting a config. See `docs/repro_report.md` Appendix C.
+
 ## Open audit items (verify next time we touch them)
 
 - [x] Reward weights `λ_f=1.0, λ_u=0.1, λ_c=0.05` — confirmed exact match in

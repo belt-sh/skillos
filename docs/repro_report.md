@@ -31,7 +31,7 @@ Every number below is recomputed from JSONLs in this repo. Figures regenerate wi
 | Held-out protocol | 140 ALFWorld `valid_seen` games, paired-by-gamefile McNemar vs a fixed no-memory baseline |
 | Reasoning | AIME24 (30), AIME25 (30), GPQA-Diamond (198) — aggregate accuracies only |
 
-The verl/GiGPO run is the framework-faithful one: real ALFWorld episodes, ground-truth success, BM25 retrieval, judged `r_cnt`, 60/60 steps, ~15,100 executor calls per step, 10.4 days wall.
+The verl/GiGPO run is the environment-faithful one: real ALFWorld episodes, ground-truth success from the game engine, BM25 retrieval, judged `r_cnt`, 60/60 steps, ~15,986 executor calls per step, 10.2 days wall. It is *not* faithful on batch size — it ran an effective batch of 64 against the paper's 32, which the TRL runs matched. That was our error, it was unforced, and it cost about half the wall clock; see [Appendix C](#appendix-c--why-the-verl-run-took-10-days-and-the-trl-runs-took-3).
 
 ---
 
@@ -54,7 +54,7 @@ Across these five sweeps we ran **50 checkpoint arms** against one baseline. Bon
 **Four candidate causes falsified** (each a full training run + 140-game sweep):
 
 - *LoRA parameterisation* — full fine-tuning reproduces the shape, slightly stronger.
-- *Framework* — verl/GiGPO reproduces the shape (black line above). TRL≠verl was our last-standing suspect; it is now closed.
+- *Framework* — verl/GiGPO reproduces the shape (black line above). TRL≠verl was our last-standing suspect; it is now closed. **Caveat:** the verl run also used an effective batch of 64 against TRL's 32 (an unintended deviation from the paper's Table 4 — see [Appendix C](#appendix-c--why-the-verl-run-took-10-days-and-the-trl-runs-took-3)), so this comparison varies two things at once. Read it as "the oscillation survives both a framework change and a 2× batch change" rather than as a clean single-variable test. That is the weaker experiment but the stronger conclusion.
 - *Task-type distribution* — training on natural ALFWorld type frequencies instead of uniform round-robin **kills** the lift (best +5.7pp, p=0.20).
 - *Within-group ordering* — the paper's easy→hard curriculum (Table 5) yields no significant lift at any checkpoint (best +4.3pp, p=0.36).
 
@@ -216,13 +216,25 @@ throughput.
 **Where the 9.4× comes from.** Roughly 2× is config, and the rest is episode
 length:
 
-- **Episodes per step, 2×.** verl: `train_batch_size=8` groups × `rollout.n=8`
-  GRPO rollouts × `|G|=10` Algorithm-1 positions = **640 ALFWorld episodes per
-  step**. TRL: `per_device=2 × grad_accum=2 × 8 processes = 32` rollouts ×
-  `|G|=10` = **320 episodes per step**. Note the asymmetry that makes this easy
-  to get wrong: in TRL-GRPO the generation batch is a *rollout* count that
-  `num_generations` divides into unique prompts, whereas in verl
-  `train_batch_size` is the prompt/env count and `rollout.n` multiplies it.
+- **Episodes per step, 2× — and this one was our mistake.** verl:
+  `train_batch_size=8` groups × `rollout.n=8` GRPO rollouts × `|G|=10`
+  Algorithm-1 positions = **640 ALFWorld episodes per step**, i.e. an effective
+  batch of **64**. TRL: `per_device=2 × grad_accum=2 × 8 processes = 32`
+  rollouts × `|G|=10` = **320 episodes per step**, effective batch **32**.
+
+  **The paper specifies batch size 32** (Table 4). TRL matched it; **verl ran
+  double**. The launch script justified `train_batch_size=8` as "divisible by
+  n_gpus=8", but verl's actual constraint is
+  `assert real_train_batch_size % n_gpus == 0` where
+  `real_train_batch_size = train_batch_size × rollout.n` — and `4 × 8 = 32`
+  satisfies it just as well. The 2× was a free choice rounded up without
+  checking the constraint it cited, and it cost roughly **5 of the 10 days**.
+
+  Note also the framework asymmetry that makes this easy to get wrong: in
+  TRL-GRPO the generation batch is a *rollout* count that `num_generations`
+  divides into unique prompts, whereas in verl `train_batch_size` is the
+  prompt/env count and `rollout.n` multiplies it. The same integer means
+  different things.
 - **Calls per episode, ~4.7×.** verl averaged ~25 executor calls per episode,
   TRL ~5. Both runs capped the executor at a similar depth (30 steps for verl,
   25 for TRL), so **the cap does not explain this** — verl's episodes actually
@@ -297,8 +309,9 @@ Remaining suspect, from trace inspection: the ReAct/atomic-verb interaction. Qwe
 | 7 | per-rollout ephemeral skill repo | closed |
 | 9 | `max_completion_length` | closed |
 | 11 | transfer-probe `r_task` | closed — superseded |
-| 14 | TRL ≠ verl framework confound | **closed** — verl/GiGPO reproduces the oscillation |
-| 13 | 8B ALFWorld baseline 14pp below paper | **open** — see Appendix E |
+| 14 | TRL ≠ verl framework confound | **closed** — verl/GiGPO reproduces the oscillation (at 2× the batch; see #15) |
+| 15 | verl run used effective batch 64, not the paper's 32 | **our bug** — unforced, cost ~5 of the 10 days. Doesn't invalidate anything; makes #14's conclusion broader |
+| 13 | 8B ALFWorld baseline 14pp below paper | **open** — see Appendix F |
 | — | WebShop benchmark | **not attempted** |
 
 Full detail and history in [`../DIVERGENCES.md`](../DIVERGENCES.md); dated run-by-run log in [`../JOURNAL.md`](../JOURNAL.md).
