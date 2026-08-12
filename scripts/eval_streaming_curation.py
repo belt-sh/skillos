@@ -45,6 +45,8 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
+import re
 import sys
 import time
 from collections import defaultdict, deque
@@ -53,6 +55,12 @@ from pathlib import Path
 # Reuse the existing eval's executor-episode building blocks.
 from scripts.eval_alfworld import classify_task, extract_task_description
 from skillos.curator.prompts import format_trajectory
+from skillos.executor.executor import get_parse_stats
+
+# Data-integrity gate. Above this share of episodes lost to upstream errors the
+# arm is unusable, so stop instead of writing a file that looks comparable.
+_ABORT_ERR_RATE = float(os.environ.get("SKILLOS_EVAL_MAX_ERROR_RATE", "0.02"))
+_ABORT_MIN_GAMES = int(os.environ.get("SKILLOS_EVAL_ABORT_MIN_GAMES", "20"))
 
 # Tool schemas exposed to the curator. Mirrors the methods on CuratorEnv that
 # TRL auto-discovered during training (new_skill_insert / skill_update /
@@ -130,6 +138,15 @@ def run_executor_wave_with_trace(env, executors, repo, max_steps: int, pool,
     done = [False] * n
     success = [False] * n
     steps = [0] * n
+    # An upstream failure is NOT a task failure. Previously this loop caught the
+    # exception and played admissible[0] instead, so a rate-limited or 401'd arm
+    # kept "playing" with invented actions and scored the result as if the agent
+    # had tried and lost. That silently voided four eval arms (r2a ckpt45-60,
+    # 52-65% invented actions) and dragged eval-v8 ckpt60 down by 12%. Now the
+    # episode is abandoned and flagged, and the caller drops it from the rate.
+    errored = [False] * n
+    n_exec_errors = [0] * n
+    coerced_before = get_parse_stats()[1]
 
     rnd = 0
     while not all(done) and rnd < max_steps:
@@ -152,9 +169,16 @@ def run_executor_wave_with_trace(env, executors, repo, max_steps: int, pool,
             try:
                 actions.append(futs[i].result())
             except Exception as e:
-                print(f"  [warn] executor failed slot {i}: {type(e).__name__}: {e}",
-                      file=sys.stderr, flush=True)
-                actions.append(admissible[i][0] if admissible[i] else "look")
+                # Abandon this episode. "look" is only to satisfy the batched
+                # env.step contract; done[i] is set first so nothing about this
+                # slot is recorded past the failure point.
+                print(f"  [error] executor failed slot {i} at step {steps[i]}: "
+                      f"{type(e).__name__}: {e} — ABANDONING episode "
+                      f"(excluded from success rate)", file=sys.stderr, flush=True)
+                errored[i] = True
+                n_exec_errors[i] += 1
+                done[i] = True
+                actions.append("look")
         obs_n, scores, dones, infos = env.step(actions)
         for i in range(n):
             if done[i]:
@@ -167,11 +191,17 @@ def run_executor_wave_with_trace(env, executors, repo, max_steps: int, pool,
             if dones[i]:
                 done[i] = True
                 success[i] = scores[i] > 0
+    # Parse coercions are counted process-wide, so attribute the wave's delta
+    # across its slots rather than pretending to a per-episode number we can't
+    # get from a shared counter.
+    coerced_wave = get_parse_stats()[1] - coerced_before
     return [
         {
             "task_type": task_type[i], "success": success[i], "steps": steps[i],
             "task": task[i], "gamefile": gamefile[i], "trajectory": traj[i],
             "n_retrieved": len(retrieved_lists[i]),
+            "errored": errored[i], "n_exec_errors": n_exec_errors[i],
+            "wave_action_coercions": coerced_wave,
         }
         for i in range(n)
     ]
@@ -264,34 +294,153 @@ class CuratorInference:
             out = self.model.generate(input_ids, **gen_kwargs)
         gen_ids = out[0, input_ids.shape[1]:].tolist()
         parsed = self._parse_response(self.tok, gen_ids)
-        tool_calls = parsed.get("tool_calls") or []
-        ops = []
-        for tc in tool_calls:
-            fn = tc.get("function") if tc.get("type") == "function" else None
-            if not fn:
-                continue
-            name = fn.get("name", "")
-            if name not in ("new_skill_insert", "skill_update", "skill_delete"):
-                continue
-            args = fn.get("arguments") or {}
-            if isinstance(args, str):
-                # Tolerate arguments accidentally serialized as a JSON string.
-                import json as _json
-                try:
-                    args = _json.loads(args)
-                except Exception:
-                    args = {}
-            ops.append(self._CurationOp(name=name, arguments=args))
-        size_before = len(repo)
-        applied = self._apply(repo, ops)
-        return {
-            "ops_parsed": len(ops),
-            "ops_executed": sum(1 for o in applied if o.executed),
-            "repo_size_before": size_before,
-            "repo_size_after": len(repo),
-            "repo_tokens_after": repo.total_tokens(),
-            "response_chars": len(parsed.get("content", "")),
+        return apply_tool_calls_to_repo(
+            repo, parsed.get("tool_calls") or [],
+            self._apply, self._CurationOp,
+            response_chars=len(parsed.get("content", "")),
+        )
+
+
+def build_curator_messages(repo, traj_result: dict, system: str, template: str):
+    """The curator's prompt, built identically for every backend.
+
+    Factored out so a remote curator cannot accidentally be evaluated on a
+    different prompt than the trained one: same top-5 BM25 retrieval, same
+    trajectory formatting, same system prompt and user template.
+    """
+    past = repo.retrieve(traj_result["task"], top_k=5)
+    past_text = repo.format_skills(past) if past else ""
+    traj_text = format_trajectory(traj_result["trajectory"])
+    user = template.format(
+        task_description=traj_result["task"],
+        past_skills=past_text,
+        agent_trajectory=traj_text,
+        result="Success" if traj_result["success"] else "Failure",
+    )
+    return system, user
+
+
+def apply_tool_calls_to_repo(repo, tool_calls, apply_fn, op_cls,
+                             response_chars: int = 0) -> dict:
+    """Turn OpenAI-style tool calls into curation ops and apply them.
+
+    Shared by the local and remote curators so the two differ *only* in how the
+    tool calls were generated, never in how they are interpreted.
+    """
+    ops = []
+    for tc in tool_calls or []:
+        # Local (TRL parser) always sets type=="function"; some remote providers
+        # omit it, so accept a bare {"name", "arguments"} shape too.
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        name = (fn or {}).get("name", "")
+        if name not in ("new_skill_insert", "skill_update", "skill_delete"):
+            continue
+        args = (fn or {}).get("arguments") or {}
+        if isinstance(args, str):
+            # Tolerate arguments accidentally serialized as a JSON string.
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            continue
+        ops.append(op_cls(name=name, arguments=args))
+    size_before = len(repo)
+    applied = apply_fn(repo, ops)
+    return {
+        "ops_parsed": len(ops),
+        "ops_executed": sum(1 for o in applied if o.executed),
+        "repo_size_before": size_before,
+        "repo_size_after": len(repo),
+        "repo_tokens_after": repo.total_tokens(),
+        "response_chars": response_chars,
+    }
+
+
+class RemoteCuratorInference:
+    """Curator served over the inference.sh API instead of a local checkpoint.
+
+    Exists to test the paper's headline economic claim: that an RL-trained 8B
+    curator beats a frontier model used directly as the curator. For that
+    comparison to mean anything the frontier model must see *exactly* what the
+    trained one saw, so prompts, tool schema and retrieval all come from the
+    same helpers the local path uses. Only generation differs.
+
+    Drop-in for CuratorInference: same .curate(repo, traj_result) signature.
+    """
+
+    def __init__(self, app: str = "google/gemini-2-5-pro",
+                 temperature: float = 0.0, max_tokens: int = 8192,
+                 reasoning_effort: str | None = "medium",
+                 infra: str = "cloud", variant: str = "default"):
+        from inferencesh import inference
+        from skillos.utils.infsh_auth import resolve_infsh_api_key
+        self.app = app
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
+        self.infra = infra
+        self.variant = variant
+        self.client = inference(api_key=resolve_infsh_api_key())
+        from skillos.curator.model import apply_curation_ops, CurationOp
+        from skillos.curator.prompts import CURATOR_SYSTEM, CURATOR_INPUT_TEMPLATE
+        self._apply = apply_curation_ops
+        self._CurationOp = CurationOp
+        self._system = CURATOR_SYSTEM
+        self._template = CURATOR_INPUT_TEMPLATE
+        # Providers that ignore the tools field would silently produce zero ops
+        # and look like a curator that chose to do nothing. Count the fallbacks
+        # so the run can be audited instead of quietly scoring as a null.
+        self.n_calls = 0
+        self.n_text_fallback = 0
+        print(f"[curator] remote backend: {app} "
+              f"(temp={temperature}, reasoning={reasoning_effort})", flush=True)
+
+    def curate(self, repo, traj_result: dict) -> dict:
+        system, user = build_curator_messages(
+            repo, traj_result, self._system, self._template)
+        payload = {
+            "text": user,
+            "system_prompt": system,
+            "tools": TOOLS_SCHEMA,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
         }
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
+        from skillos.utils.infsh_client import run_task_resilient
+        from skillos.executor.executor import _log_infsh_task
+        result = run_task_resilient(
+            self.client,
+            {"app": self.app, "infra": self.infra,
+             "variant": self.variant, "input": payload},
+            on_task_id=lambda tid: _log_infsh_task("curator", self.app, tid),
+        )
+        output = (result or {}).get("output") or {}
+        tool_calls = output.get("tool_calls") or []
+        text = output.get("response") or ""
+        self.n_calls += 1
+        if not tool_calls and text:
+            # Fall back to the <tool_call>{...}</tool_call> convention Qwen3 uses,
+            # in case the provider returned the calls as prose.
+            found = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, re.S)
+            for blob in found:
+                try:
+                    tool_calls.append({"function": json.loads(blob)})
+                except Exception:
+                    pass
+            if tool_calls:
+                self.n_text_fallback += 1
+        meta = apply_tool_calls_to_repo(
+            repo, tool_calls, self._apply, self._CurationOp,
+            response_chars=len(text),
+        )
+        usage = output.get("usage") or {}
+        if isinstance(usage, dict):
+            for k in ("input_tokens", "output_tokens", "total_tokens"):
+                if k in usage:
+                    meta[f"usage_{k}"] = usage[k]
+        return meta
 
 
 def main():
@@ -326,14 +475,25 @@ def main():
     p.add_argument("--curator-max-new-tokens", type=int, default=4096)
     p.add_argument("--curator-device", default="cuda",
                    help="Device for the curator model (e.g. cuda, cuda:0).")
+    p.add_argument("--curator-backend", default="local", choices=["local", "remote"],
+                   help="local = trained checkpoint on GPU (default, unchanged). "
+                        "remote = a hosted model as the curator, for the paper's "
+                        "'trained 8B beats a frontier curator' comparison. Remote "
+                        "needs no GPU and no --curator-checkpoint.")
+    p.add_argument("--curator-app", default="google/gemini-2-5-pro",
+                   help="inference.sh app id for --curator-backend remote.")
+    p.add_argument("--curator-reasoning-effort", default="medium",
+                   help="Thinking budget for a remote curator; 'none' to disable.")
     p.add_argument("--out", required=True,
                    help="Per-game JSONL output. Compare arms by joining on `gamefile`.")
     p.add_argument("--overwrite", action="store_true",
                    help="Allow clobbering an existing --out file.")
     args = p.parse_args()
 
-    if args.mode == "closed_loop" and not args.curator_checkpoint:
-        p.error("--curator-checkpoint is required in closed_loop mode")
+    if args.mode == "closed_loop" and args.curator_backend == "local" \
+            and not args.curator_checkpoint:
+        p.error("--curator-checkpoint is required in closed_loop mode "
+                "with --curator-backend local")
     if Path(args.out).exists() and not args.overwrite:
         p.error(f"{args.out} already exists — a crashed/finished arm would be "
                 "silently truncated. Pass --overwrite to clobber.")
@@ -363,7 +523,14 @@ def main():
     repo = SkillRepo()  # always starts empty — paper protocol
 
     curator = None
-    if args.mode == "closed_loop":
+    if args.mode == "closed_loop" and args.curator_backend == "remote":
+        curator = RemoteCuratorInference(
+            app=args.curator_app,
+            temperature=args.curator_temperature,
+            reasoning_effort=(None if args.curator_reasoning_effort in ("none", "")
+                              else args.curator_reasoning_effort),
+        )
+    elif args.mode == "closed_loop":
         curator = CuratorInference(
             args.curator_checkpoint,
             device=args.curator_device,
@@ -376,7 +543,9 @@ def main():
 
     print(f"[eval] mode={args.mode}  split={args.split}  num_games={args.num_games}  "
           f"batch_size={bs}", flush=True)
-    print(f"[eval] curator={args.curator_checkpoint or '<none>'}", flush=True)
+    _cur_desc = (args.curator_app if args.curator_backend == "remote"
+                 else (args.curator_checkpoint or "<none>"))
+    print(f"[eval] curator={_cur_desc} (backend={args.curator_backend})", flush=True)
     print(f"[eval] executor={args.executor}/{args.executor_app}", flush=True)
     print(f"[eval] out={out_path}", flush=True)
 
@@ -423,6 +592,9 @@ def main():
                     "task_type": result["task_type"],
                     "task": result["task"],
                     "success": bool(result["success"]),
+                    "errored": bool(result["errored"]),
+                    "n_exec_errors": result["n_exec_errors"],
+                    "wave_action_coercions": result["wave_action_coercions"],
                     "steps": result["steps"],
                     "n_retrieved_at_eval": result["n_retrieved"],
                     "executor_wave_seconds": round(executor_wave_seconds, 2),
@@ -434,32 +606,57 @@ def main():
                 fh.flush()
                 games_done += 1
 
-                n_ok = sum(1 for r in records if r["success"])
-                running_sr = n_ok / len(records)
+                scored = [r for r in records if not r["errored"]]
+                n_ok = sum(1 for r in scored if r["success"])
+                running_sr = n_ok / max(len(scored), 1)
+                mark = "ER" if result["errored"] else ("OK" if result["success"] else "XX")
                 print(f"  [{games_done:3d}/{args.num_games}] w{wave_idx:02d}.{slot:02d} "
                       f"{result['task_type']:6s}  "
-                      f"{'OK' if result['success'] else 'XX'}  steps={result['steps']:2d}  "
+                      f"{mark}  steps={result['steps']:2d}  "
                       f"repo={len(repo):3d}  "
-                      f"SR_so_far={n_ok}/{len(records)}={running_sr:.1%}", flush=True)
+                      f"SR_so_far={n_ok}/{len(scored)}={running_sr:.1%}", flush=True)
+            n_err = sum(1 for r in records if r["errored"])
+            err_rate = n_err / max(len(records), 1)
+            calls, coerced = get_parse_stats()
             print(f"  --- wave {wave_idx} done: exec={executor_wave_seconds:.0f}s  "
-                  f"curator={curator_wave_seconds:.0f}s  repo_now={len(repo)} ---", flush=True)
+                  f"curator={curator_wave_seconds:.0f}s  repo_now={len(repo)}  "
+                  f"abandoned={n_err}/{len(records)}={err_rate:.1%}  "
+                  f"coerced_actions={coerced}/{calls}="
+                  f"{coerced / max(calls, 1):.1%} ---", flush=True)
+            # Hard stop rather than write a quietly-corrupt arm. An arm that has
+            # lost this much of its data cannot be compared to a clean baseline,
+            # and the only thing worse than losing it is publishing it.
+            if len(records) >= _ABORT_MIN_GAMES and err_rate > _ABORT_ERR_RATE:
+                print(f"\n[ABORT] {err_rate:.1%} of episodes abandoned to upstream "
+                      f"errors (limit {_ABORT_ERR_RATE:.1%}). This arm is not "
+                      f"usable; fix the upstream problem and re-run. Partial "
+                      f"output left at {out_path} for diagnosis.",
+                      file=sys.stderr, flush=True)
+                raise SystemExit(3)
     pool.shutdown(wait=False)
 
     wall = time.time() - wall_start
-    n = len(records)
-    n_ok = sum(1 for r in records if r["success"])
+    n_all = len(records)
+    scored = [r for r in records if not r["errored"]]
+    n = len(scored)
+    n_ok = sum(1 for r in scored if r["success"])
     overall = n_ok / max(n, 1)
+    n_err = n_all - n
 
     by_type: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    for r in records:
+    for r in scored:
         by_type[r["task_type"]][0] += int(r["success"])
         by_type[r["task_type"]][1] += 1
 
-    print(f"\n=== {args.mode}  ckpt={args.curator_checkpoint or '<none>'}  "
+    print(f"\n=== {args.mode}  curator={_cur_desc}  "
           f"split={args.split}  bs={bs} ===")
     print(f"  TOTAL: {n_ok}/{n} = {overall:.1%}  "
           f"({wall:.0f}s total, {wall / max(n, 1):.0f}s/game avg, "
           f"{wave_idx} waves)")
+    calls, coerced = get_parse_stats()
+    print(f"  data integrity: {n_err}/{n_all} episodes abandoned to upstream "
+          f"errors; {coerced}/{calls} actions coerced to admissible[0] "
+          f"({coerced / max(calls, 1):.1%})")
     for t in sorted(by_type):
         s, total = by_type[t]
         print(f"  {t:6s}: {s}/{total} = {s / max(total, 1):.1%}")

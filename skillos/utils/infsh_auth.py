@@ -64,7 +64,39 @@ def resolve_infsh_api_key(explicit: str | None = None) -> str:
     key = _from_env_file()
     if key:
         return key
+    key = _from_belt_cli()
+    if key:
+        return key
     raise RuntimeError(
-        "No inference.sh API key found. Run `belt login --key <KEY>` or set "
-        "INFSH_API_KEY in your shell / .env file."
+        "No inference.sh API key found. Run `belt login` (or `belt login --key "
+        "<KEY>`), or set INFSH_API_KEY in your shell / .env file."
     )
+
+
+def _from_belt_cli() -> str | None:
+    """Ask the belt CLI for the key.
+
+    Device-login sessions write only `session_token` + `team_id` to
+    ~/.inferencesh/config.json, so `_from_belt_config` finds no `api_key` and
+    auth fails even though the CLI is perfectly logged in. `belt auth token`
+    resolves the key for either login style. Shelling out keeps the secret out
+    of the environment and out of any tracked file, which is the project rule.
+    """
+    import shutil
+    import subprocess
+    exe = shutil.which("belt")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "auth", "token"], capture_output=True,
+                             text=True, timeout=20)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    key = (out.stdout or "").strip().splitlines()
+    key = key[-1].strip() if key else ""
+    # Guard against the CLI printing a banner or a hint instead of a bare key.
+    if key and " " not in key and 12 <= len(key) <= 200:
+        return key
+    return None

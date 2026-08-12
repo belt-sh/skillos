@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from abc import ABC, abstractmethod
 
 from skillos.curator.prompts import ALFWORLD_EXECUTOR
@@ -33,6 +34,35 @@ _EXEC_POLL_MAX_S = float(os.environ.get("SKILLOS_EXEC_POLL_MAX_S", "150"))
 _EXEC_MAX_RESUBS = int(os.environ.get("SKILLOS_EXEC_MAX_RESUBS", "2"))
 _EXEC_BACKOFF_BASE_S = float(os.environ.get("SKILLOS_EXEC_BACKOFF_BASE_S", "10"))
 _EXEC_BACKOFF_CAP_S = float(os.environ.get("SKILLOS_EXEC_BACKOFF_CAP_S", "30"))
+
+
+# Parse-coercion telemetry. `_parse_action` must return *something*, so an
+# unparseable model output silently becomes admissible[0]. Counting it is the
+# only way an arm can report how much of its trajectory the model actually drove.
+_parse_lock = threading.Lock()
+_parse_calls = 0
+_parse_coerced = 0
+
+
+def _bump_parse(coerced: bool) -> None:
+    global _parse_calls, _parse_coerced
+    with _parse_lock:
+        _parse_calls += 1
+        if coerced:
+            _parse_coerced += 1
+
+
+def get_parse_stats() -> tuple[int, int]:
+    """(calls, coerced-to-admissible[0]) since process start or last reset."""
+    with _parse_lock:
+        return _parse_calls, _parse_coerced
+
+
+def reset_parse_stats() -> None:
+    global _parse_calls, _parse_coerced
+    with _parse_lock:
+        _parse_calls = 0
+        _parse_coerced = 0
 
 
 def _log_infsh_task(role: str, app: str, task_id: str) -> None:
@@ -278,21 +308,33 @@ class InfshExecutor(Executor):
 
 
 def _parse_action(model_output: str, admissible_actions: list[str]) -> str:
-    """Parse action from model output. Paper uses <action>...</action> tags."""
+    """Parse action from model output. Paper uses <action>...</action> tags.
+
+    When nothing parseable is found we still have to hand the env *an* action,
+    so we coerce to admissible[0]. That coercion is a silent substitution of the
+    model's intent, and for a long time it was also unmeasured, which means no
+    result in this repo could say how much of any trajectory was actually the
+    model acting. `get_parse_stats()` now counts it. Coercion is legitimate
+    (the env needs an action); invisible coercion is not.
+    """
     match = re.search(r"<action>\s*(.*?)\s*</action>", model_output, re.DOTALL)
     if match:
         action = match.group(1).strip()
         if action in admissible_actions:
+            _bump_parse(coerced=False)
             return action
         action_lower = action.lower()
         for a in admissible_actions:
             if a.lower() == action_lower:
+                _bump_parse(coerced=False)
                 return a
 
     for a in admissible_actions:
         if a in model_output:
+            _bump_parse(coerced=False)
             return a
 
+    _bump_parse(coerced=True)
     return admissible_actions[0] if admissible_actions else "look"
 
 

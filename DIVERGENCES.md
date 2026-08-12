@@ -498,3 +498,39 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
   now obsolete.
 - [ ] `steps_per_generation` defaults — TRL default = `gradient_accumulation_steps`;
   paper doesn't specify but this is the standard GRPO convention
+
+---
+
+## 16. `r_task` was measured on a median of 1 executor evaluation, not 9 (found 2026-08-12)
+
+- **Paper:** Algorithm 1 scores a curator rollout on the frozen executor's success
+  across positions 2..|G| of the group, i.e. 9 informed evaluations per rollout at
+  our |G|=10.
+- **Ours:** a per-phase wall-clock budget (`SKILLOS_PHASE_BUDGET_S`, added to stop
+  the NCCL watchdog killing runs) cut most positions before they ran. Measured
+  from the training logs as a share of informed positions:
+
+  | run | deadline-cut | surviving measurements per rollout | rollouts with `r_task=0` by construction |
+  |---|---|---|---|
+  | v8 LoRA (final log segment) | 70.1% | median 1, mean 1.9 | 41.4% |
+  | FFT seed-1 | 64.6% | median 1, mean 2.7 | 36.6% |
+  | FFT seed-2 | 78.6% | median 1, mean 2.3 | 15.6% |
+  | FFT seed-3 | 61.2% | median 2, mean 3.8 | 10.2% |
+
+- **Why:** each position is a full remote ALFWorld episode of up to 30 executor
+  calls. Ten of them per rollout does not fit inside a phase budget sized to keep
+  8 ranks in lockstep under the 1800s collective watchdog.
+- **Impact:** the single largest fidelity gap in this reproduction, larger than
+  LoRA-vs-FFT (#5) or TRL-vs-verl (#14). `r_task` per rollout is close to a coin
+  flip rather than a 9-sample mean, which caps how much real signal GRPO can
+  extract, and `if not tail: r_task = 0.0` turns an all-cut rollout into a false
+  zero rather than a masked sample. Both push measured lift *down*, so the
+  reported effects are if anything conservative — but the run is not a faithful
+  test of the paper's protocol, and "weak effect" cannot be cleanly separated
+  from "thin measurement" without a dense re-run (~3× the phase budget, so about
+  1 to 1.5 weeks for one seed).
+- **Related bug, fixed:** upstream executor errors were scored `success: False`
+  instead of masked like a cut (14.9% of positions on the v8 tail, 11.3% on FFT
+  seed-1, ≤0.4% on seeds 2/3, 0% on verl). With surviving denominators of 1 to 2,
+  one false failure could zero a rollout's `r_task` outright. Now masked with
+  `upstream_error: True`. See Appendix I of `docs/repro_report.md`.

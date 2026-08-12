@@ -393,9 +393,18 @@ class Algo1CuratorEnv:
             print(f"[algo1] executor failed slot={self._slot} group={self._group_id} "
                   f"position={position}: {type(e).__name__}: {e}",
                   file=sys.stderr, flush=True)
+            # MASK, don't fail. This position never produced a measurement, so
+            # scoring it False charges the curator for an upstream outage. With
+            # most positions already deadline-cut the surviving denominator is
+            # often 1-2, so one false failure could zero a rollout's r_task
+            # outright and inject within-group variance uncorrelated with
+            # curator quality — which is exactly the part GRPO turns into
+            # gradient. Same `cut` contract the deadline path uses, plus a
+            # distinct marker so the two causes stay separable in postmortems.
             result = {
                 "task_description": f"<executor-error-position-{position}>",
-                "trajectory": [], "success": False, "steps": 0,
+                "trajectory": [], "success": None, "cut": True,
+                "upstream_error": True, "steps": 0,
                 "gamefile": "", "skills_text": "",
             }
         self._task_descriptions[position] = result.get("task_description", "")
