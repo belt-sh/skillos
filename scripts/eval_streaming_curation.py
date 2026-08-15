@@ -452,6 +452,9 @@ def main():
     p.add_argument("--curator-checkpoint", default=None,
                    help="Path to the trained curator dir (required for closed_loop). "
                         "May be the run root (final model) or a checkpoint-N subdir.")
+    p.add_argument("--static-repo", default=None,
+                   help="Preload this directory of markdown skills and disable curation. "
+                        "Used for the hand-written oracle upper-bound arm.")
     p.add_argument("--split", default="valid_seen",
                    choices=["valid_seen", "valid_unseen", "train"])
     p.add_argument("--num-games", type=int, default=140,
@@ -521,6 +524,22 @@ def main():
 
     from skillos.skills.repo import SkillRepo
     repo = SkillRepo()  # always starts empty — paper protocol
+
+    # `--static-repo DIR` preloads a fixed skill set and never curates. Used for
+    # the hand-written oracle arm, which bounds what curation could be worth on
+    # this executor: same retrieval, same prompt, human-authored content.
+    if args.static_repo:
+        n_loaded = 0
+        for md in sorted(Path(args.static_repo).glob("*.md")):
+            text = md.read_text()
+            if not text.lstrip().startswith("---"):
+                continue  # skip README and other non-skill files
+            repo.insert(md.stem, text)
+            n_loaded += 1
+        if n_loaded == 0:
+            raise SystemExit(f"--static-repo {args.static_repo} contained no skills")
+        print(f"[eval] static repo: {n_loaded} hand-written skills, curation disabled",
+              flush=True)
 
     curator = None
     if args.mode == "closed_loop" and args.curator_backend == "remote":
@@ -664,6 +683,17 @@ def main():
         print(f"  final repo: {len(repo)} skills, {repo.total_tokens()} tokens")
         ops_total = sum(r.get("curator/ops_executed", 0) for r in records)
         print(f"  curator ops executed across run: {ops_total}")
+
+    # Always dump the end-of-run repository next to the JSONL. A curator arm's
+    # success rate says nothing about WHAT the curator wrote, and without the
+    # text there is no way to analyse mechanism after the fact. Cheap to keep.
+    repo_path = out_path.with_suffix(".repo.md")
+    with open(repo_path, "w") as rf:
+        rf.write(f"<!-- final repo: {len(repo)} skills, {repo.total_tokens()} tokens\n")
+        rf.write(f"     arm: {args.mode} curator={_cur_desc} split={args.split} -->\n\n")
+        for name, skill in sorted(repo.skills.items()):
+            rf.write(f"{'=' * 70}\n# {name}\n{'=' * 70}\n{skill.content}\n\n")
+    print(f"  repo dump: {repo_path}")
     print(f"  JSONL: {out_path}")
 
 

@@ -1,0 +1,106 @@
+% Main LaTeX document for the SkillOS reproduction paper.
+%
+% Sections live as markdown in this directory and are converted to .tex by
+% scripts/build_paper.sh (pandoc). Do not edit the generated build/*.tex files;
+% edit the markdown. This keeps one source of truth while the results are still
+% moving, and gives a proper preprint at the end.
+%
+% Build:  bash scripts/build_paper.sh
+% Output: docs/paper/build/main.pdf
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,
+            urlcolor=blue!50!black]{hyperref}
+\usepackage{natbib}
+\bibliographystyle{plainnat}
+
+% The markdown sources use Greek letters inline (lambda, beta) because that is
+% how the reward equation reads in the original. pdflatex with inputenc cannot
+% map them on its own, so declare them rather than mangling the sources.
+\DeclareUnicodeCharacter{03BB}{$\lambda$}
+\DeclareUnicodeCharacter{03B2}{$\beta$}
+\DeclareUnicodeCharacter{03B1}{$\alpha$}
+\DeclareUnicodeCharacter{03BE}{$\xi$}
+\DeclareUnicodeCharacter{00B1}{$\pm$}
+\DeclareUnicodeCharacter{00D7}{$\times$}
+\DeclareUnicodeCharacter{2264}{$\leq$}
+\DeclareUnicodeCharacter{2265}{$\geq$}
+\DeclareUnicodeCharacter{2212}{$-$}
+\DeclareUnicodeCharacter{2248}{$\approx$}
+
+% pandoc emits these for markdown constructs it cannot map directly.
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\passthrough}[1]{#1}
+
+% The markdown sources carry their own section numbers ("## 5.4 ...") because
+% the prose cross-references them by hand while results are still moving. Let
+% those stand as the single source of truth rather than having LaTeX number the
+% headings a second time.
+\setcounter{secnumdepth}{0}
+
+\captionsetup{font=small,labelfont=bf}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+
+\title{\bf A Reproduction of SkillOS Under Contemporaneous Controls:\\
+       The Curator Lift Does Not Survive a Same-Epoch Baseline}
+
+% arXiv and essentially every venue require authors to be people who can take
+% responsibility for the content, so the agent that executed the study is
+% disclosed rather than listed. Section 4.5 and Appendix A give the full division
+% of labour; this is not a courtesy footnote.
+\author{%
+  Omer Karisman\\
+  \texttt{ok@inference.sh}\\[6pt]
+  \small\itshape
+  The experiments, implementation, analysis, and first draft of this paper were
+  produced by\\
+  \small\itshape
+  an LLM agent (Claude, Anthropic) under the author's direction. This is a
+  material fact\\
+  \small\itshape
+  about the study's reliability, not an acknowledgement: see Section~4.5,
+  Section~6.3, and Appendix~A.
+}
+
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\input{build/01_abstract}
+\end{abstract}
+
+\input{build/02_introduction}
+\input{build/03_background_related}
+\input{build/04_methodology}
+\input{build/05_results}
+\input{build/05b_power}
+\input{build/06_threats}
+\input{build/07_discussion}
+
+\bibliography{references}
+
+\appendix
+\input{build/08_appendix_conduct}
+\input{build/09_appendix_incidents}
+\input{build/10_appendix_tables}
+
+\end{document}

@@ -64,8 +64,14 @@ def solve_one(row: dict, repo: SkillRepo, app: str, max_tokens: int,
     try:
         resp = _call_infsh(app, messages, max_tokens, temperature, top_p, reasoning)
     except Exception as e:
+        # An upstream failure is not a wrong answer. This used to return
+        # correct=False, which scored API outages as the model getting the
+        # problem wrong; `errored` keeps it out of the accuracy denominator
+        # instead. Same bug the ALFWorld harness had, see repro_report
+        # Appendix I.
         return {**{k: row[k] for k in ("id", "kind", "answer")},
-                "gold": row["answer"], "correct": False, "pred": None,
+                "gold": row["answer"], "correct": None, "errored": True,
+                "pred": None,
                 "response": None, "error": f"{type(e).__name__}: {str(e)[:200]}",
                 "n_skills": len(skills), "wall_s": time.time() - t0}
     ok, pred = grade(resp, row["answer"], row["kind"])
@@ -112,14 +118,20 @@ def run_closed_loop(rows: list[dict], out_path: str, curator_checkpoint: str,
                 "n_retrieved": rec["n_skills"],
             }
             curation = {}
-            try:
-                curation = curator.curate(repo, traj)
-            except Exception as e:
-                curation = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+            if rec.get("errored"):
+                # Nothing was solved or attempted, so there is no trajectory to
+                # curate. Asking the curator to write a lesson from an API error
+                # would poison the repo for every later problem in the run.
+                curation = {"skipped_upstream_error": True}
+            else:
+                try:
+                    curation = curator.curate(repo, traj)
+                except Exception as e:
+                    curation = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             rec = {**rec, "curation": curation,
                    "repo_size": len(repo), "repo_tokens": repo.total_tokens()}
             f.write(json.dumps(rec) + "\n"); f.flush()
-            marker = "OK" if rec["correct"] else "XX"
+            marker = "ER" if rec.get("errored") else ("OK" if rec["correct"] else "XX")
             n_ops = curation.get("ops_executed", 0)
             print(f"[{i:4d}/{len(rows)}] {rec['id']:<15s} {marker} pred={rec['pred']!s:<6s} "
                   f"gold={rec['gold']:<4s} ops={n_ops} repo={len(repo)} "
@@ -142,13 +154,15 @@ def run_no_memory(rows: list[dict], out_path: str, app: str, max_tokens: int,
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
                 done += 1
-                marker = "OK" if rec["correct"] else "XX"
+                marker = "ER" if rec.get("errored") else ("OK" if rec["correct"] else "XX")
                 print(f"[{done:4d}/{n}] {rec['id']:<15s} {marker} pred={rec['pred']!s:<6s} "
                       f"gold={rec['gold']:<4s} {rec['wall_s']:.1f}s", flush=True)
 
 
 def summarize(out_path: str) -> None:
-    rows = [json.loads(l) for l in open(out_path)]
+    all_rows = [json.loads(l) for l in open(out_path)]
+    rows = [r for r in all_rows if not r.get("errored")]
+    n_err = len(all_rows) - len(rows)
     by_ds: dict[str, list[bool]] = {}
     for r in rows:
         ds = r["id"].split("-")[0]
@@ -159,7 +173,17 @@ def summarize(out_path: str) -> None:
         ok = sum(by_ds[ds]); n = len(by_ds[ds])
         print(f"  {ds:<8s} {ok:3d}/{n} = {100*ok/n:5.1f}%")
     overall_ok = sum(1 for r in rows if r["correct"])
-    print(f"  TOTAL:   {overall_ok:3d}/{len(rows)} = {100*overall_ok/len(rows):5.1f}%")
+    print(f"  TOTAL:   {overall_ok:3d}/{max(len(rows), 1)} = "
+          f"{100 * overall_ok / max(len(rows), 1):5.1f}%")
+    err_rate = n_err / max(len(all_rows), 1)
+    print(f"  data integrity: {n_err}/{len(all_rows)} problems dropped to "
+          f"upstream errors ({err_rate:.1%})")
+    limit = float(os.environ.get("SKILLOS_EVAL_MAX_ERROR_RATE", "0.02"))
+    if err_rate > limit:
+        print(f"  [ABORT] error rate {err_rate:.1%} exceeds {limit:.1%}; this "
+              f"arm is not usable, fix upstream and re-run", file=sys.stderr,
+              flush=True)
+        raise SystemExit(3)
 
 
 def main() -> int:

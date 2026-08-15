@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import random
 import re
 import threading
 from dataclasses import dataclass, field
 
 import yaml
 from rank_bm25 import BM25Okapi
+
+# Retrieval ablation switch. "bm25" is the paper's behaviour and the default;
+# nothing changes unless the env var is set explicitly.
+_RETRIEVAL_MODE = os.environ.get("SKILLOS_RETRIEVAL_MODE", "bm25").lower()
+_SHUFFLE_SEED = os.environ.get("SKILLOS_RETRIEVAL_SHUFFLE_SEED", "0")
 
 
 @dataclass
@@ -96,9 +103,22 @@ class SkillRepo:
         self._bm25_dirty = True
 
     def retrieve(self, query: str, top_k: int = 5) -> list[Skill]:
-        """Retrieve top-k skills by BM25 relevance."""
+        """Retrieve top-k skills by BM25 relevance.
+
+        `SKILLOS_RETRIEVAL_MODE=shuffled` swaps relevance ranking for a
+        deterministic per-query random draw of the same size from the same repo.
+        This is the content-versus-context control: if a curator's measured lift
+        survives shuffling, the executor is being helped by having *some* extra
+        markdown in its prompt, not by the skills being about the task. Seeded
+        from the query so an arm is reproducible and two arms on the same games
+        draw the same way.
+        """
         if not self.skills:
             return []
+        if _RETRIEVAL_MODE == "shuffled":
+            skill_list = list(self.skills.values())
+            rng = random.Random(f"{_SHUFFLE_SEED}:{query}")
+            return rng.sample(skill_list, min(top_k, len(skill_list)))
         if self._bm25_dirty:
             with self._index_lock:
                 if self._bm25_dirty:  # another probe thread may have rebuilt it

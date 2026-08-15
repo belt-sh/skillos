@@ -127,9 +127,21 @@ stage_eval () {
     find "output/$d" -maxdepth 1 -type l -name '*.jsonl' ! -iname '*gpqa*' \
       -exec cp -L {} "$STAGE/eval/$d/" \; 2>/dev/null || true
   done
-  # hard guarantee: nothing GPQA-derived leaves this machine
+  # hard guarantee: nothing GPQA-derived leaves this machine.
+  # Filename matching is not enough. A reasoning sweep arm is named ckpt55.jsonl
+  # and carries GPQA problem text, model responses and answers inside it, so a
+  # name-only guard would wave it straight through. EVAL_DIRS happens to exclude
+  # the reasoning dirs today, but that is a list someone can edit; this checks
+  # content.
   if find "$STAGE/eval" -iname '*gpqa*' | grep -q .; then
-    log "ABORT: GPQA-matching file found in eval staging"; exit 1
+    log "ABORT: GPQA-matching filename found in eval staging"; exit 1
+  fi
+  if grep -rlIE '"kind"[[:space:]]*:[[:space:]]*"gpqa"|gpqa_(diamond|ft)' \
+       "$STAGE/eval" 2>/dev/null | grep -q .; then
+    log "ABORT: GPQA-derived CONTENT found inside a staged eval file:"
+    grep -rlIE '"kind"[[:space:]]*:[[:space:]]*"gpqa"|gpqa_(diamond|ft)' \
+      "$STAGE/eval" 2>/dev/null | sed 's/^/  /' | tee -a "$LOG"
+    exit 1
   fi
   log "  staged: $(du -sh "$STAGE/eval" | cut -f1), $(find "$STAGE/eval" -name '*.jsonl' | wc -l) jsonl"
 }

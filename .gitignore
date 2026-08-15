@@ -33,3 +33,14 @@ experiments/**/HRM-Text-1B/
 experiments/**/HRM-Text-repo/
 experiments/**/*.log
 .claude/
+
+# LaTeX build artifacts. docs/paper/build/*.tex is regenerated from the
+# markdown by scripts/build_paper.sh; main.pdf is committed so the current
+# draft is readable without a TeX install.
+docs/paper/build/
+docs/paper/*.aux
+docs/paper/*.log
+docs/paper/*.out
+docs/paper/*.bbl
+docs/paper/*.blg
+docs/paper/*.toc
