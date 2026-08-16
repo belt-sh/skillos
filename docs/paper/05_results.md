@@ -142,9 +142,11 @@ writing:
   returning a random five skills instead of the BM25 top five. Same curator, same
   repository, same prompt length, relevance destroyed. If +9.0pp survives, the
   executor is helped by extra markdown rather than by relevant skills.
-- **Hand-written oracle skills.** Eight skills authored from the published
-  ALFWorld action grammar and task-type definitions, with no curator. Bounds what
-  any curator could be worth on this executor.
+- **Author-written oracle skills.** Eight skills written from the published
+  ALFWorld action grammar and task-type definitions, with no curator and no
+  access to eval data. Written by the LLM agent conducting the study, not by a
+  human: an easier condition than the curator's, since the curator must infer
+  the same content from rollouts. Bounds what a curator could be worth here.
 
 We consider the shuffled control decisive for how much the Section 5.3 result is
 worth, and we commit to reporting it either way.

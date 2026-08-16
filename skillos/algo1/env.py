@@ -115,6 +115,11 @@ class Algo1CuratorEnv:
 
         self.reward = 0.0
         self.done = False
+        # Set by _finalize_reward. True when NO informed position was ever
+        # measured, so this rollout carries no evidence about the curator and
+        # reward_func must neutralise its advantage rather than trust r_task=0.
+        self.r_task_unmeasured = False
+        self.n_task_measured = 0
 
     # ---- TRL hooks ----------------------------------------------------
 
@@ -138,6 +143,8 @@ class Algo1CuratorEnv:
         self._judge_futures = []
         self.reward = 0.0
         self.done = False
+        self.r_task_unmeasured = False
+        self.n_task_measured = 0
 
         # Synchronized rollout deadline. All rollouts in a step reset within a
         # quick serial loop, so per-rollout deadlines are ~aligned. Once a
@@ -433,10 +440,32 @@ class Algo1CuratorEnv:
         # that actually ran.
         tail = [r for r in self._executor_results[1:] if not r.get("cut")]
         if not tail:
+            # NO informed position ever ran: every one was deadline-cut or died
+            # upstream. This rollout carries no evidence about the curator.
+            #
+            # It used to score r_task = 0.0, which is the same error class as the
+            # retracted eval bug (docs/paper/09_appendix_incidents.md): an
+            # infrastructure failure recorded as bad performance. It is worse
+            # here than in eval, because GRPO centres advantages *within* a
+            # group, so a rollout zeroed by construction pulls the gradient
+            # against whatever this curator happened to write, at random, inside
+            # the only part of the reward that reaches the gradient. It hit 10 to
+            # 41% of rollouts.
+            #
+            # Now: flag it. `reward_func` in scripts/train_algo1.py assigns such
+            # rollouts their group's mean reward, so their advantage is 0 and
+            # they contribute nothing rather than noise.
+            self.r_task_unmeasured = True
             r_task = 0.0
+            print(f"[algo1] rollout has NO measured informed position "
+                  f"({len(self._executor_results) - 1} positions, all cut) — "
+                  f"flagged unmeasured, advantage will be neutralised",
+                  file=sys.stderr, flush=True)
         else:
+            self.r_task_unmeasured = False
             successes = [float(r.get("success") or 0.0) for r in tail]
             r_task = sum(successes) / len(successes)
+        self.n_task_measured = len(tail)
 
         r_fc = reward_function_call(self._ops_applied)
 

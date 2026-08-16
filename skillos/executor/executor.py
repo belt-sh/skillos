@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import threading
 from abc import ABC, abstractmethod
 
@@ -59,10 +60,73 @@ def get_parse_stats() -> tuple[int, int]:
 
 
 def reset_parse_stats() -> None:
-    global _parse_calls, _parse_coerced
+    global _parse_calls, _parse_coerced, _reformat_tries, _reformat_recovered
     with _parse_lock:
         _parse_calls = 0
         _parse_coerced = 0
+        _reformat_tries = 0
+        _reformat_recovered = 0
+
+
+# Reformat-retry telemetry and switch. On an unparseable output we re-ask once
+# with an explicit format reminder before coercing. Set
+# SKILLOS_EXECUTOR_RETRY_PARSE=0 to restore the old coerce-immediately behaviour
+# (needed to reproduce pre-fix arms).
+_RETRY_ON_PARSE_FAIL = os.environ.get("SKILLOS_EXECUTOR_RETRY_PARSE", "1") != "0"
+_reformat_tries = 0
+_reformat_recovered = 0
+
+
+def _bump_reformat(recovered: bool) -> None:
+    global _reformat_tries, _reformat_recovered
+    with _parse_lock:
+        _reformat_tries += 1
+        if recovered:
+            _reformat_recovered += 1
+
+
+def get_reformat_stats() -> tuple[int, int]:
+    """(reformat attempts, attempts that produced a parseable action)."""
+    with _parse_lock:
+        return _reformat_tries, _reformat_recovered
+
+
+def _parses(text: str, admissible_actions: list[str]) -> bool:
+    """Would _parse_action find a real action here, without coercing?
+
+    Kept separate from _parse_action so the check can run without polluting the
+    coercion counters: telemetry has to describe what the episode actually did,
+    and a speculative parse check is not part of the episode.
+    """
+    if not text:
+        return False
+    match = re.search(r"<action>\s*(.*?)\s*</action>", text, re.DOTALL)
+    if match:
+        action = match.group(1).strip()
+        if action in admissible_actions:
+            return True
+        if any(a.lower() == action.lower() for a in admissible_actions):
+            return True
+    return any(a in text for a in admissible_actions)
+
+
+def _reformat_prompt(bad_output: str, admissible_actions: list[str]) -> str:
+    """Minimal re-ask. Deliberately does NOT restate the task or the skills.
+
+    Restating them would give the retry a different (and easier) context than
+    the first attempt, so a recovered action would no longer be an answer to the
+    same question. All this asks for is the same intent in the required form,
+    choosing from the same list.
+    """
+    listing = "\n".join(f"- {a}" for a in admissible_actions)
+    return (
+        "Your previous reply did not contain a valid action.\n\n"
+        f"Previous reply:\n{bad_output[-1500:]}\n\n"
+        "Reply with exactly one action from this list, wrapped in action tags, "
+        "and nothing else:\n"
+        f"{listing}\n\n"
+        "Format: <action>chosen action here</action>"
+    )
 
 
 def _log_infsh_task(role: str, app: str, task_id: str) -> None:
@@ -304,6 +368,46 @@ class InfshExecutor(Executor):
                 text = output.get("reasoning") or ""
         else:
             text = ""
+
+        # One reformat attempt before we coerce. Coercing to admissible[0] hands
+        # the environment an action the model never chose, and it is not neutral:
+        # the coercion rate is 2.1% with an empty repo and 7 to 9% with retrieved
+        # skills, so r_task partly measures "did my skills break the executor's
+        # output format" rather than "was my advice good" — a confound that
+        # penalises longer skills for reasons unrelated to their content.
+        # Re-asking with an explicit format reminder is cheap and removes most of
+        # it. If the retry also fails to parse, we coerce as before and it is
+        # counted.
+        if _RETRY_ON_PARSE_FAIL and not _parses(text, admissible_actions):
+            retry_payload = dict(input_payload)
+            retry_payload["text"] = _reformat_prompt(text, admissible_actions)
+            retry_payload["temperature"] = 0.0  # deterministic reformat
+            try:
+                retry = run_task_resilient(
+                    self.client, {**params, "input": retry_payload},
+                    on_task_id=lambda tid: _log_infsh_task(
+                        "executor-reformat", self.app, tid),
+                    max_stream_reconnects=_EXEC_MAX_STREAM_RECONNECTS,
+                    poll_fallback_max_seconds=_EXEC_POLL_MAX_S,
+                    max_resubmissions=1,   # a reformat is not worth a storm
+                    resubmission_backoff_base=_EXEC_BACKOFF_BASE_S,
+                    resubmission_backoff_cap=_EXEC_BACKOFF_CAP_S,
+                )
+                r_out = (retry or {}).get("output") or {}
+                r_text = ""
+                if isinstance(r_out, dict):
+                    r_text = (r_out.get("response") or "") or (r_out.get("reasoning") or "")
+                _bump_reformat(recovered=_parses(r_text, admissible_actions))
+                if _parses(r_text, admissible_actions):
+                    text = r_text
+            except Exception as e:
+                # A failed reformat must never take down the episode: fall
+                # through to the original text and let coercion be counted.
+                print(f"[executor] reformat attempt failed "
+                      f"({type(e).__name__}: {e}); coercing", file=sys.stderr,
+                      flush=True)
+                _bump_reformat(recovered=False)
+
         return _parse_action(text, admissible_actions)
 
 

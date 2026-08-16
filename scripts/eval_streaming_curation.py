@@ -55,7 +55,7 @@ from pathlib import Path
 # Reuse the existing eval's executor-episode building blocks.
 from scripts.eval_alfworld import classify_task, extract_task_description
 from skillos.curator.prompts import format_trajectory
-from skillos.executor.executor import get_parse_stats
+from skillos.executor.executor import get_parse_stats, get_reformat_stats
 
 # Data-integrity gate. Above this share of episodes lost to upstream errors the
 # arm is unusable, so stop instead of writing a file that looks comparable.
@@ -673,9 +673,15 @@ def main():
           f"({wall:.0f}s total, {wall / max(n, 1):.0f}s/game avg, "
           f"{wave_idx} waves)")
     calls, coerced = get_parse_stats()
+    tries, recovered = get_reformat_stats()
     print(f"  data integrity: {n_err}/{n_all} episodes abandoned to upstream "
           f"errors; {coerced}/{calls} actions coerced to admissible[0] "
           f"({coerced / max(calls, 1):.1%})")
+    if tries:
+        print(f"  reformat retries: {tries} unparseable outputs re-asked, "
+              f"{recovered} recovered ({recovered / max(tries, 1):.0%}); "
+              f"without the retry, coercion would have been "
+              f"{(coerced + recovered) / max(calls, 1):.1%}")
     for t in sorted(by_type):
         s, total = by_type[t]
         print(f"  {t:6s}: {s}/{total} = {s / max(total, 1):.1%}")

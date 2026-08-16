@@ -51,7 +51,16 @@ IMPERATIVE = re.compile(
 
 
 def parse_repo(path: Path) -> dict[str, str]:
-    """Split a repo dump back into {skill_name: text}."""
+    """Split a repo dump back into {skill_name: text}.
+
+    Repo dumping was added to the eval harness partway through; arms that ran
+    before it have no `.repo.md` and cannot be analysed retrospectively. Say so
+    rather than dying on a missing file.
+    """
+    if not path.exists():
+        raise SystemExit(
+            f"no repo dump at {path}. Arms that ran before repo dumping was "
+            f"added have none; re-run the arm to capture one.")
     text = path.read_text()
     skills: dict[str, str] = {}
     for block in text.split("=" * 70):

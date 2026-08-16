@@ -41,6 +41,7 @@ from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
 from skillos.algo1 import Algo1CuratorEnv, configure as configure_algo1
+from skillos.algo1 import env as algo1_env  # for _num_generations at reward time
 from skillos.envs.curator_env import configure as configure_classic_env
 
 
@@ -121,8 +122,92 @@ def build_dataset(num_episodes: int, group_size: int,
 
 def reward_func(environments: list[Algo1CuratorEnv], **kwargs) -> list[float]:
     """Algorithm 1 reward: each env recorded |G| executor results during its
-    own tool-loop. We just finalize per-env — no shared probe phase."""
-    return [env._finalize_reward() for env in environments]
+    own tool-loop. We finalize per-env, then neutralise rollouts that produced
+    no measurement at all.
+
+    WHY THE SECOND STEP EXISTS. A rollout whose every informed position was
+    deadline-cut has no evidence about its curator. It used to receive
+    r_task = 0.0, i.e. an infrastructure failure scored as bad curation. That is
+    the same error class as the retracted eval bug, and it is worse inside GRPO:
+    advantages are centred within the group, so a spuriously-zeroed rollout
+    pushes the gradient away from whatever that curator wrote, at random, in the
+    exact term that reaches the parameters. It affected 10 to 41% of rollouts.
+
+    The fix: give such rollouts the mean reward of the MEASURED rollouts in their
+    own group. Their advantage becomes ~0, so they neither help nor hurt. This is
+    the standard treatment for a missing observation in a group-relative
+    estimator, and it degrades gracefully: if every rollout in a group is
+    unmeasured, the whole group is flat and contributes nothing, which is the
+    correct outcome for a group we failed to measure.
+
+    Grouping: TRL repeats each prompt `num_generations` times consecutively, so
+    environments arrive as contiguous blocks of that size. We read the size off
+    the env module rather than assuming, and fall back to treating the batch as
+    one group if it does not divide evenly.
+    """
+    rewards = [env._finalize_reward() for env in environments]
+    unmeasured = [bool(getattr(env, "r_task_unmeasured", False))
+                  for env in environments]
+
+    if not any(unmeasured):
+        _log_measurement_health(environments, rewards, n_neutralised=0)
+        return rewards
+
+    n_gen = getattr(algo1_env, "_num_generations", 8) or 8
+    if len(environments) % n_gen != 0:
+        print(f"[algo1] WARNING: batch of {len(environments)} does not divide by "
+              f"num_generations={n_gen}; treating the batch as a single group "
+              f"for reward neutralisation", file=sys.stderr, flush=True)
+        n_gen = len(environments)
+
+    n_neutralised = 0
+    for start in range(0, len(environments), n_gen):
+        block = range(start, min(start + n_gen, len(environments)))
+        measured = [rewards[i] for i in block if not unmeasured[i]]
+        if not measured:
+            # Whole group unmeasured: flatten it so it contributes no gradient.
+            group_mean = 0.0
+            for i in block:
+                rewards[i] = group_mean
+            n_neutralised += len(list(block))
+            print(f"[algo1] group at offset {start}: ALL {len(list(block))} "
+                  f"rollouts unmeasured — group flattened, contributes nothing",
+                  file=sys.stderr, flush=True)
+            continue
+        group_mean = sum(measured) / len(measured)
+        for i in block:
+            if unmeasured[i]:
+                rewards[i] = group_mean
+                n_neutralised += 1
+
+    _log_measurement_health(environments, rewards, n_neutralised)
+    return rewards
+
+
+def _log_measurement_health(environments, rewards, n_neutralised: int) -> None:
+    """Per-step visibility into how much of the reward was actually measured.
+
+    DIVERGENCES #16 was discovered months late because nothing printed this. The
+    numbers to watch: `measured` well below |G|-1 means the deadline budget is
+    too tight and r_task is being estimated from one or two episodes, which is
+    the real reason held-out lift came out small.
+    """
+    n = len(environments)
+    counts = [int(getattr(env, "n_task_measured", 0)) for env in environments]
+    counts_sorted = sorted(counts)
+    median = counts_sorted[n // 2] if n else 0
+    try:
+        from skillos.executor.executor import get_parse_stats, reset_parse_stats
+        calls, coerced = get_parse_stats()
+        reset_parse_stats()
+        coercion = f"{coerced}/{calls} actions coerced ({coerced / max(calls, 1):.1%})"
+    except Exception:
+        coercion = "coercion telemetry unavailable"
+    print(f"[algo1] reward health: {n} rollouts, "
+          f"r_task measured from median {median} positions "
+          f"(min {counts_sorted[0] if n else 0}, max {counts_sorted[-1] if n else 0}), "
+          f"{n_neutralised} neutralised as unmeasured; {coercion}",
+          file=sys.stderr, flush=True)
 
 
 def train(config: dict) -> None:
