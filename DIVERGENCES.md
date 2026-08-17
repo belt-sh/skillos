@@ -534,3 +534,52 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
   seed-1, ≤0.4% on seeds 2/3, 0% on verl). With surviving denominators of 1 to 2,
   one false failure could zero a rollout's `r_task` outright. Now masked with
   `upstream_error: True`. See Appendix I of `docs/repro_report.md`.
+
+### Update 2026-08-17 — measured directly, and now being closed
+
+The estimates above were reconstructed from log grep. A dedicated 3-step
+instrumented smoke (`scripts/smoke_reward_health.sh`, 24 reward-health lines)
+measured it live under the **old** config (`SKILLOS_PHASE_BUDGET_S=3600`,
+`|G|=10`):
+
+| quantity | measured |
+|---|---|
+| informed positions measured per rollout | **mean 2.3 of 9**, best single rollout 5, never 9 |
+| rollouts with zero measured positions | 9 of 96 |
+| wall per GRPO step | ~72 min |
+| action coercion | **0.15%** (10 of 6,480), after the reformat-retry fix |
+
+This closes Appendix C's open item in `docs/repro_report.md`. TRL's training
+episodes really were shallow: the 4.7×-fewer-executor-calls-per-episode gap
+versus verl was the deadline cutting positions, not a difference in episode
+length caused by the frameworks. **TRL's 3-day wall clock was purchased with this
+divergence.** Any comparison that treats TRL as "the fast framework" is really
+comparing a full measurement against a 26% one.
+
+**Extrapolated cost of closing it:** 2.3 positions per 3600s implies ~3.9h to
+measure all 9. That lands on top of the previous 4h NCCL collective timeout, so
+full fidelity is not reachable by raising the phase budget alone — the timeout
+has to move with it.
+
+**Decision (2026-08-17, user):** close the gap rather than shrink `|G|`. Full
+paper fidelity is the requirement, and every timeout is sized to respect it
+rather than the reverse:
+
+| knob | old | new | why |
+|---|---|---|---|
+| `SKILLOS_PHASE_BUDGET_S` | 3,600 (1h) | **18,000 (5h)** | ~3.9h to measure 9 positions, plus margin |
+| `SKILLOS_NCCL_TIMEOUT_S` | 14,400 (4h) | **36,000 (10h)** | 2× the phase budget, so skew can never reach it |
+| `SKILLOS_EXECUTOR_TIMEOUT_S` | 900 | 900 | unchanged; a single episode never needed more |
+| `\|G\|` | 10 | 10 | **unchanged — this is the point** |
+
+Cost: ~4h per step, so roughly **10 days for one seed** against the previous 3.
+That is the honest price of the paper's protocol on this hardware, and it is
+worth recording that the paper's own 16-H100 budget would face the same
+arithmetic: the workload is bound by remote executor calls, not by GPUs.
+
+Note the framework corollary, since it inverts an earlier claim in this file:
+verl's apparent 2.6× throughput advantage came from having 64 episodes in flight
+(its batch error, #15), not from the framework. At the paper's batch of 32 both
+stacks hold 32 episodes in flight and get the same throughput. Framework choice
+is close to irrelevant to wall clock here; batch size and the phase budget are
+the only levers that matter.

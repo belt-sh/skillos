@@ -153,29 +153,33 @@ def reward_func(environments: list[Algo1CuratorEnv], **kwargs) -> list[float]:
         _log_measurement_health(environments, rewards, n_neutralised=0)
         return rewards
 
-    n_gen = getattr(algo1_env, "_num_generations", 8) or 8
-    if len(environments) % n_gen != 0:
-        print(f"[algo1] WARNING: batch of {len(environments)} does not divide by "
-              f"num_generations={n_gen}; treating the batch as a single group "
-              f"for reward neutralisation", file=sys.stderr, flush=True)
-        n_gen = len(environments)
+    # Group by the env's OWN group id, not by block arithmetic over
+    # num_generations. Measured on the 2026-08-16 smoke: reward_func receives 4
+    # envs per call (32 completions sharded over 8 ranks) while num_generations
+    # is 8, so block arithmetic would have fallen back to "treat the batch as one
+    # group". That fallback happened to be right — all 4 envs in a call shared
+    # gid=229 — but relying on it is correct by accident. Group identity already
+    # lives on the env, put there by the dataset row precisely because slot
+    # arithmetic is untrustworthy here (see the 2026-06-10 group-collapse
+    # postmortem). Use it.
+    groups: dict[object, list[int]] = {}
+    for i, env in enumerate(environments):
+        groups.setdefault(getattr(env, "_group_id", None), []).append(i)
 
     n_neutralised = 0
-    for start in range(0, len(environments), n_gen):
-        block = range(start, min(start + n_gen, len(environments)))
-        measured = [rewards[i] for i in block if not unmeasured[i]]
+    for gid, idxs in groups.items():
+        measured = [rewards[i] for i in idxs if not unmeasured[i]]
         if not measured:
             # Whole group unmeasured: flatten it so it contributes no gradient.
-            group_mean = 0.0
-            for i in block:
-                rewards[i] = group_mean
-            n_neutralised += len(list(block))
-            print(f"[algo1] group at offset {start}: ALL {len(list(block))} "
-                  f"rollouts unmeasured — group flattened, contributes nothing",
+            for i in idxs:
+                rewards[i] = 0.0
+            n_neutralised += len(idxs)
+            print(f"[algo1] group {gid}: ALL {len(idxs)} rollouts unmeasured — "
+                  f"flattened, contributes no gradient",
                   file=sys.stderr, flush=True)
             continue
         group_mean = sum(measured) / len(measured)
-        for i in block:
+        for i in idxs:
             if unmeasured[i]:
                 rewards[i] = group_mean
                 n_neutralised += 1
