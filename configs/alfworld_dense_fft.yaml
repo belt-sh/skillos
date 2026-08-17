@@ -42,8 +42,21 @@ output_dir: ./output/alfworld-dense-fft-seed1
 epochs: 1
 max_steps: 60                     # paper budget (Table 4)
 num_episodes: 3553                # paper training split (→ 355 groups of |G|=10)
-batch_size: 2                     # per device
-gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+# Effective batch is UNCHANGED at the paper's 32 (4 × 1 × 8 procs). Only the
+# split changes: one micro-batch instead of two.
+#
+# Why it matters here and nowhere else: accumulation steps run SEQUENTIALLY, and
+# each rollout in a micro-batch is a chain of 10 remote ALFWorld episodes. With
+# accum=2 only 16 rollouts are ever in flight, so a step costs two 64-minute
+# passes. With accum=1 all 32 run at once and a step is one pass. Measured
+# 2026-08-17: ~16 concurrent episodes at accum=2, against the 32 the batch
+# implies. Same gradient, half the wall clock.
+#
+# Cost: per-device generation memory doubles. ZeRO-3 + vLLM colocate at 0.3
+# utilisation peaked at 65.5/81.5 GB with per_device=2, so this is plausible but
+# unproven; an OOM shows up in the first minutes, not at step 30.
+batch_size: 4                     # per device
+gradient_accumulation_steps: 1    # 4 × 1 × 8 procs = 32 (paper effective batch)
 learning_rate: 1.0e-6             # paper's EXACT FFT rate (no LoRA 10× compensation)
 num_generations: 8                # paper GRPO group size N=8
 max_completion_length: 4096       # paper Max Response Length
