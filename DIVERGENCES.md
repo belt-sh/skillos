@@ -583,3 +583,41 @@ verl's apparent 2.6× throughput advantage came from having 64 episodes in fligh
 stacks hold 32 episodes in flight and get the same throughput. Framework choice
 is close to irrelevant to wall clock here; batch size and the phase budget are
 the only levers that matter.
+
+### Update 2026-08-17 (later) — the stated cause was only half of it
+
+The entry above blames the phase budget. That was a real cause in the 1h-budget
+runs, and it was hiding a second, larger one.
+
+Raising `SKILLOS_PHASE_BUDGET_S` from 3,600 to 18,000 changed nothing: median
+measured positions stayed at **2 of 9**, and the run logged **zero deadline cuts
+and zero executor timeouts**. So positions were not being cut at all any more.
+They were never being reached.
+
+**Actual mechanism.** TRL enforces `max_completion_length` against the
+*accumulated multi-turn completion*, not per response
+(`grpo_trainer.py:1620`: `len(pct) - len(prompt_ids[i]) > self.max_completion_length`,
+where `pct` is prompt + completion + every tool result so far). One tool result is
+a whole ALFWorld trajectory: ~685 tokens at 21 steps, measured with the Qwen3
+tokenizer, plus the curator's own tool-call text carrying skill bodies. At
+`max_completion_length: 4096` that is about **three positions**, after which TRL
+silently drops the tool result and ends the rollout.
+
+`|G|=10` was therefore never reachable. Every run in this project trained on
+~3 positions of a 10-position protocol, and the config comment labelling 4096 as
+"paper Max Response Length" is what made it look intentional.
+
+**Why raising it is more faithful, not less.** The paper's Max Response Length
+caps the curator's *response*. It is not a budget for a ten-position conversation
+carrying ten trajectories; that conflation is a TRL implementation detail. Set to
+16,384, budgeted as 10 x (~685 tool result + ~400 response) ~= 11k, against
+Qwen3-8B's native 32,768 context and a ~500-token prompt.
+
+**Lesson, and it is the same one three times now.** Both of this gap's causes
+were invisible because nothing printed the quantity that mattered. The phase
+budget was found by grepping for cut markers, which existed; this one had no
+marker at all, because TRL drops the tool result silently and a short rollout
+looks exactly like a finished one. It only surfaced because the reward-health
+line now prints measured positions per rollout, and the number refused to move
+when the supposed cause was removed. **When removing a cause does not move the
+number, the cause was wrong.**

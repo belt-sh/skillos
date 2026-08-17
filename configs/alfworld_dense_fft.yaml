@@ -59,7 +59,27 @@ batch_size: 4                     # per device
 gradient_accumulation_steps: 1    # 4 × 1 × 8 procs = 32 (paper effective batch)
 learning_rate: 1.0e-6             # paper's EXACT FFT rate (no LoRA 10× compensation)
 num_generations: 8                # paper GRPO group size N=8
-max_completion_length: 4096       # paper Max Response Length
+# NOT the paper's "Max Response Length" as applied here. Measured 2026-08-17.
+#
+# TRL enforces this against the ACCUMULATED multi-turn completion:
+#   grpo_trainer.py:1620  len(pct) - len(prompt_ids[i]) > self.max_completion_length
+# where pct is prompt + completion + every tool result so far. One tool result is
+# an entire ALFWorld trajectory, ~685 tokens at 21 steps, plus the curator's own
+# tool-call text (skill bodies, often several hundred more). So 4096 holds about
+# 3 positions, and TRL silently drops the tool result and ends the rollout there.
+#
+# That, not the phase budget, is why r_task was measured from ~2 of 9 positions.
+# Proof: with the budget raised from 1h to 5h the median stayed at 2, and the run
+# logged ZERO deadline cuts and ZERO executor timeouts. The phase budget was a
+# real cause in the older 1h runs; this was the second cause hiding behind it.
+#
+# The paper's 4096 is a cap on the curator's RESPONSE, not on a ten-position
+# conversation carrying ten trajectories. Conflating the two is a TRL artifact,
+# so raising it is MORE faithful to the protocol, not less. Budget for it:
+#   10 positions x (~685 tool result + ~400 curator response) ~= 11k tokens
+# Qwen3-8B is natively 32768 and the prompt is ~500 tokens, so 16384 fits with
+# room to spare.
+max_completion_length: 16384
 temperature: 1.0                  # paper rollout temperature
 beta: 0.001                       # paper Table 4 KL; ZeRO-3 shards the ref model
                                   # so it fits (smoke-proven 65.5G). = v8 exactly.
