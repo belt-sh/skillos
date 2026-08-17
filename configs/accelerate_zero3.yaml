@@ -19,10 +19,12 @@ deepspeed_config:
   zero_stage: 3
   # MUST match the training config's gradient_accumulation_steps: DeepSpeed
   # asserts train_batch_size == micro_batch_per_gpu * accum * world_size and
-  # fails at launch otherwise (32 != 4 * 2 * 8). Kept at 1 to pair with
-  # alfworld_dense_fft.yaml's batch_size: 4, which puts all 32 rollouts in
-  # flight at once instead of two sequential passes of 16.
-  gradient_accumulation_steps: 1
+  # fails at launch otherwise (32 != 4 * 2 * 8). Batch lives in TWO files; a
+  # change here without one there is a launch-time assert, not a silent bug.
+  # 4 pairs with alfworld_dense_fft.yaml's batch_size: 1 → 1 * 4 * 8 = 32.
+  # Accumulation no longer costs generation concurrency: generation_batch_size
+  # is pinned to 32 there, so all 32 rollouts still run in one pass.
+  gradient_accumulation_steps: 4
   gradient_clipping: 1.0
   zero3_init_flag: true
   zero3_save_16bit_model: true
@@ -40,5 +42,13 @@ deepspeed_config:
   # of which the 8B bf16 weights are 16, leaving ~8 for KV cache. At 16k-token
   # completions that is already tight; cutting it would trade an OOM in training
   # for a failure in generation.
+  #
+  # Offload alone was NOT enough: the very next attempt OOM'd again at 22:10,
+  # this time asking for 14.21 GiB. That size identifies it as the logits tensor
+  # (per_device x seq x vocab), not optimizer state, so the real fix is the
+  # micro-batch split in alfworld_dense_fft.yaml. Offload stays on because the
+  # headroom it buys is real and the optimizer step is 1.4% of wall — but it was
+  # treating a symptom. Two OOMs, ~4h of GPU time, because I sized the first fix
+  # to the first traceback instead of computing what actually holds the memory.
   offload_optimizer_device: cpu
   offload_param_device: none
