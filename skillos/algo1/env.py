@@ -279,10 +279,18 @@ class Algo1CuratorEnv:
                   f"{self._group_id} position={position} (budget="
                   f"{_executor_timeout_s:.0f}s) — using sentinel trajectory",
                   file=sys.stderr, flush=True)
+            # THIRD instance of the fallback-on-upstream-failure bug class, in
+            # the per-episode timeout path this time. It used to record
+            # `success: False` with no `cut` flag, so the r_task filter
+            # (`if not r.get("cut")`) treated a timed-out episode as an episode
+            # the executor tried and lost. Mask it like a deadline cut: an
+            # episode we failed to measure is not evidence about the curator.
             result = {
                 "task_description": f"<timeout-position-{position}>",
                 "trajectory": [],
-                "success": False,
+                "success": None,
+                "cut": True,
+                "upstream_error": True,
                 "steps": 0,
                 "gamefile": "",
                 "skills_text": "",

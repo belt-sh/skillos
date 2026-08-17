@@ -153,6 +153,30 @@ skills. This reasoning process MUST be enclosed within <think> </think> tags.
 Once you've finished your reasoning, you should choose an admissible action for current step and \
 MUST present it within <action> </action> tags."""
 
+# Native-thinking variant of the above (SKILLOS_EXECUTOR_PROMPT=native).
+#
+# The paper's prompt (Figure 9, above) tells the executor to reason inside
+# <think></think> in its reply. On a native-reasoning endpoint the model does not
+# comply: measured 2026-08-17, Qwen3-8B via inference.sh returned 4,427 chars in
+# the provider's separate `reasoning` field and a response containing only
+# `<action>...</action>`, with no <think> tags at all, at both
+# reasoning_effort=medium and None.
+#
+# So the instruction is not producing the behaviour it asks for. It is asking the
+# model to duplicate, in its response channel, work the serving stack already does
+# in a reasoning channel. This variant drops that sentence and keeps everything
+# else byte-identical, so the model is asked for exactly one thing: the action.
+#
+# This IS a deviation from Figure 9 and is recorded as such. It is measured
+# against the paper-literal prompt on a paired held-out arm before use, because
+# "the model ignores it anyway" is a hypothesis about why the executor emits
+# unparseable output, not an established fact.
+ALFWORLD_EXECUTOR_NATIVE_THINKING = ALFWORLD_EXECUTOR.replace(
+    "You should first reason step-by-step about the current situation with the help of past "
+    "relevant skills. This reasoning process MUST be enclosed within <think> </think> tags.\n",
+    "",
+)
+
 REASONING_EXECUTOR = """\
 You are a reasoning expert with access to a list of skills. Use the skills below to provide \
 correct responses to user queries.

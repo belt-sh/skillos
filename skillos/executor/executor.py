@@ -19,7 +19,18 @@ import sys
 import threading
 from abc import ABC, abstractmethod
 
-from skillos.curator.prompts import ALFWORLD_EXECUTOR
+import os as _os
+
+from skillos.curator.prompts import (ALFWORLD_EXECUTOR,
+                                     ALFWORLD_EXECUTOR_NATIVE_THINKING)
+
+# Which executor prompt to use. "paper" is Figure 9 verbatim and stays the
+# default, so nothing changes unless a run opts in. "native" drops the
+# <think></think> instruction, which a native-reasoning endpoint ignores anyway
+# (measured 2026-08-17). See skillos/curator/prompts.py for the evidence.
+_EXECUTOR_PROMPT = ALFWORLD_EXECUTOR
+if _os.environ.get("SKILLOS_EXECUTOR_PROMPT", "paper").lower() == "native":
+    _EXECUTOR_PROMPT = ALFWORLD_EXECUTOR_NATIVE_THINKING
 
 # Executor infsh retry budget (env vars must be set before import — see run.sh).
 # Kept SHORT on purpose: the executor fires the most infsh calls by far (seed
@@ -161,7 +172,7 @@ class Executor(ABC):
 
     def _build_prompt(self, task_description, observation, admissible_actions,
                       step_count, action_history, retrieved_skills, history_length=3) -> str:
-        return ALFWORLD_EXECUTOR.format(
+        return _EXECUTOR_PROMPT.format(
             task_description=task_description,
             retrieved_skills=retrieved_skills or "None",
             step_count=step_count,
