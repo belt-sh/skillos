@@ -17,7 +17,12 @@ mixed_precision: bf16
 deepspeed_config:
   deepspeed_multinode_launcher: standard
   zero_stage: 3
-  gradient_accumulation_steps: 2
+  # MUST match the training config's gradient_accumulation_steps: DeepSpeed
+  # asserts train_batch_size == micro_batch_per_gpu * accum * world_size and
+  # fails at launch otherwise (32 != 4 * 2 * 8). Kept at 1 to pair with
+  # alfworld_dense_fft.yaml's batch_size: 4, which puts all 32 rollouts in
+  # flight at once instead of two sequential passes of 16.
+  gradient_accumulation_steps: 1
   gradient_clipping: 1.0
   zero3_init_flag: true
   zero3_save_16bit_model: true
