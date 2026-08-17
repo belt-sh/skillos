@@ -26,5 +26,19 @@ deepspeed_config:
   gradient_clipping: 1.0
   zero3_init_flag: true
   zero3_save_16bit_model: true
-  offload_optimizer_device: none
+  # OOM'd 2026-08-17 in the backward pass: rank5 wanted 4.64 GiB with 2.87 free.
+  # Cause was max_completion_length 16384 (4x longer sequences, non-negotiable for
+  # |G|=10 fidelity) stacking with per_device 4.
+  #
+  # Offloading Adam states to host RAM frees ~8 GiB/GPU — a 4x margin on the
+  # shortfall — and costs optimizer-step time, which is the cheapest thing we have:
+  # the gradient step is 1.4% of wall in this workload, the other 85% is waiting on
+  # remote executor calls. 8B fp32 Adam states are ~64 GiB total against 2 TB of
+  # host RAM.
+  #
+  # NOT lowering vllm_gpu_memory_utilization below 0.3: 0.3 of 80 GiB is 24 GiB,
+  # of which the 8B bf16 weights are 16, leaving ~8 for KV cache. At 16k-token
+  # completions that is already tight; cutting it would trade an OOM in training
+  # for a failure in generation.
+  offload_optimizer_device: cpu
   offload_param_device: none

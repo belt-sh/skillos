@@ -939,3 +939,150 @@ wandb `run-20260730_081941-7rm65scp`.
 **Still open:** WebShop entirely; the 14pp 8B ALFWorld baseline gap
 (DIVERGENCES #13); GPQA content scrub before the repo goes public; HF upload of
 both frameworks' checkpoints.
+
+---
+
+## 2026-08-16/17 — three harness defects, a retraction, and the first faithful `|G|=10` run
+
+The week the reproduction stopped being about skill repositories and started
+being about our own instrument. Four findings, two of which retract things
+written above.
+
+### RETRACTION 1: the canonical 33.6% baseline was a drift outlier
+
+Every lift in this journal and in `docs/repro_report.md` was computed as
+`arm − 33.6%`, against a no-memory control measured once in May 2026 and reused
+for ten weeks. Four replicates in the same week as the arms: **39.3, 39.3, 39.3,
+41.4%**, mean 39.8%, spread 2.1pp. The May figure is outside genuine run-to-run
+variance.
+
+Re-paired against a contemporaneous control, the effects go away. FFT seed-2's
+headline **+13.6pp (p=0.0026) becomes +3.6pp (p=0.47)**, and 8 of its 12
+checkpoints turn negative. Seed-1: 5 of 7 negative. The "significant peak
+somewhere in every run" pattern that we reproduced across three seeds and two RL
+frameworks, and spent four training runs trying to explain, was substantially an
+artifact of the shared stale reference.
+
+The worst part is written down above in this very file: an instruction to *always*
+pair against the fixed canonical baseline and never a fresh one, on the theory
+that the baseline had ~8pp of run-to-run variance. It has ~2pp. The 8pp was one
+bad number, and pinning to it inflated everything.
+
+**Agreement across seeds and frameworks does not protect you from a shared
+reference.** All those runs were independently trained and independently
+evaluated. They agreed because they were all subtracting the same wrong number.
+
+### RETRACTION 2: `|G|=10` was never reachable, so no run ever ran the protocol
+
+`r_task` was known to be thin (DIVERGENCES #16, "median 1 of 9 evaluations"), and
+we blamed the phase budget — the wall-clock deadline that cuts positions to keep
+8 ranks inside the NCCL collective watchdog. So we raised it from 1h to 5h.
+
+The median stayed at **2 of 9**, with **zero deadline cuts and zero executor
+timeouts logged**. Positions were not being cut. They were never being reached.
+
+TRL enforces `max_completion_length` against the **accumulated** multi-turn
+completion (`grpo_trainer.py:1620`), not per response. One tool result is a whole
+ALFWorld trajectory — ~685 Qwen3 tokens at 21 steps — plus the curator's own
+skill bodies. At `max_completion_length: 4096` that is about **three positions**,
+after which TRL silently drops the tool result and ends the rollout.
+
+So all seven training runs in this project trained on ~3 positions of a
+10-position protocol. The config comment labelling 4096 as "paper Max Response
+Length" is what made it look deliberate; the paper's figure caps the curator's
+*response*, not a ten-position conversation carrying ten trajectories. Raising it
+to 16,384 is therefore more faithful, not less.
+
+At 16,384 the reward-health line reports **median 9 of 9, min 9, max 9**. That is
+the first faithful `|G|=10` run in this project.
+
+**When removing a supposed cause does not move the number, the cause was wrong.**
+The phase budget was a real cause in the 1h runs and was hiding a bigger one.
+
+### Three instances of one bug: a sentinel that does not say why
+
+An eval harness answered an executor API failure by playing the first admissible
+action and scoring the episode as an ordinary task failure. During an eight-hour
+`HTTP 401` outage on 2026-07-20 this affected **52 to 65%** of the env steps in
+four arms — and those arms produced the most significant result in the project,
+the cross-domain sign reversal at p ≤ 0.0005 reported above. It was measuring the
+outage. Re-run clean, those arms sit within noise of baseline.
+
+Worth internalising *why* it was so significant: a systematically crippled arm is
+*reliably* crippled. It fails the same games every time, in the same direction,
+with low variance. That is precisely what a paired significance test rewards. A
+severe upstream defect does not produce noisy results that fail to reach
+significance; it produces clean results that sail past it.
+
+Two more instances of the same class turned up on audit:
+
+- **Training**, `env.py`: a rollout whose every informed position was cut scored
+  `r_task = 0.0`. Inside GRPO this is worse than in eval, because advantages are
+  centred within the group, so a spuriously-zeroed rollout pushes the gradient
+  away from whatever that curator wrote, at random, in the only term that reaches
+  the parameters. 10 to 41% of rollouts. Now flagged and given the group mean of
+  measured rollouts, so its advantage is ~0.
+- **Training**, per-episode timeout path: `success: False` with no `cut` flag, so
+  a timed-out episode counted as one the executor tried and lost. Now masked.
+
+The pattern: every place we hand back a sentinel result has to say *why*, and two
+of three didn't.
+
+### Two inefficiencies that cost ~5× wall clock, and one that cost 1-2pp of SR
+
+Prompted by the entirely reasonable question of why a Qwen3-8B taking short
+actions should need 4h per training step.
+
+- **TRL runs async tool calls serially across completions.** Its loop creates a
+  completion's tool coroutines and gathers them *inside* the per-completion loop,
+  so the gather parallelises multiple calls within one completion, not across
+  them. Our curator emits exactly one `curate_and_advance` per turn → a gather of
+  one → one remote ALFWorld episode per rank at a time. Measured: 18.3s per call
+  under live load, 20.6 calls/min, i.e. ~6 episodes in flight against the 32 the
+  batch implies. `scripts/patch_trl_tool_concurrency.py` restructures it.
+
+  Our own env carried a comment asserting TRL's gather "can interleave all 16
+  rollouts on a rank concurrently." It cannot. That was an assumption about a
+  dependency written as if it were a fact, and it cost ~4× on every run here.
+- **Gradient accumulation serialises the batch.** `per_device=2 × accum=2` puts
+  only 16 rollouts in flight; `per_device=4 × accum=1` is the same effective batch
+  of 32 in one pass. (Both `configs/accelerate_zero3.yaml` and the training config
+  carry an accum setting and DeepSpeed asserts they agree — it fails at launch,
+  loudly, which is the good kind of failure.)
+- **Unparseable executor output was silently coerced to `admissible[0]`.** Now
+  re-asked once with a format reminder: coercion **2.1-9.1% → 0.15%**, with 95 of
+  96 unparseable outputs recovered. This moved the *absolute* no-memory baseline
+  to **42.1%**, so the unexplained gap to the paper's 47.9% is now **5.8pp, down
+  from 8pp**. Part of what we treated as an implementation mystery was our own
+  harness throwing away the model's intent.
+
+### One thing that was measured and did nothing
+
+On the hypothesis that the serving stack handles thinking natively, we dropped
+Figure 9's "reasoning MUST be enclosed within `<think> </think>`" sentence. The
+hypothesis was right about the mechanism: at both `reasoning_effort=medium` and
+`None`, Qwen3-8B returns its reasoning in the provider's separate channel and a
+response containing only `<action>`, never a `<think>` tag, and dropping the
+sentence halves unparseable output (96 → 55 retries) and is 14% faster.
+
+It changes success rate by **+0.0pp (p=1.0)**, both arms 59/140. So the paper
+prompt stays the default. Measuring it cost two eval arms and settled a question
+we would otherwise have argued about.
+
+### Where this leaves the reproduction
+
+Running: full-fidelity ALFWorld FFT, `|G|=10`, batch 32, all paper
+hyperparameters, median 9 of 9 positions measured, **1.95h/step measured → ~4.9
+days** for 60 steps. `systemd --user` unit `skillos-dense5`, supervised by
+`scripts/dense_supervisor.sh`, resuming from checkpoints every 5 steps.
+
+Every result in `docs/repro_report.md` predates at least one of the four fixes
+above and needs re-measuring against the 42.1% contemporaneous baseline. The
+paper draft in `docs/paper/` is being built to make that impossible to get wrong:
+Appendix C tables are generated from the JSONLs, and every family declares its
+measurement epoch.
+
+**Still open:** WebShop; the remaining 5.8pp baseline gap; a fresh sweep of every
+checkpoint family against the new baseline; whether the one positive result
+(reasoning-trained curator, +11.2pp held-out, survives Holm) reproduces across
+seeds.

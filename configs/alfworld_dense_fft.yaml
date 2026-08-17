@@ -121,7 +121,11 @@ logging_steps: 1
 report_to: wandb
 
 save_strategy: steps
-save_steps: 5                     # full-state ZeRO-3 saves are ~16GB each; every
+# Every step, not every 5. A step is now ~2h, so save_steps=5 meant a crash
+# discarded up to 10h of GPU time — and the first OOM discarded 2h precisely
+# because no checkpoint existed yet and the supervisor had to restart fresh.
+# Full-state ZeRO-3 saves are ~16 GB; 60 of them is ~1 TB against 21 TB free.
+save_steps: 1
                                   # 5 steps keeps disk sane (12 ckpts × ~16GB).
 save_total_limit: 12
 
