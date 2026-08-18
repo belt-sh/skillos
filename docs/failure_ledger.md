@@ -445,3 +445,86 @@ adopted after paying for them:
 - Compute what holds the memory before answering an OOM.
 - Audit fidelity before committing compute, not after the run completes.
 - Treat "the fix did not move the number" as evidence about the diagnosis.
+
+---
+
+# Verification pass (2026-08-18): corrections to this ledger
+
+Eight verifier agents re-checked every row above against the raw transcript, the
+installed libraries and git history, instructed to default to UNSUPPORTED. **Every
+incident survived. Many of the numbers did not.** The rows above are left as
+written so the corrections are auditable; where they conflict, this section wins.
+
+## Corrections that make an entry wrong
+
+- **Monitor "died silently" (05-20 row 20) is FALSE.** The monitor survived the
+  context compaction and caught the crash 16 minutes later; only the agent's
+  task-list *view* was lost, and it told the user the monitor was dead. The real
+  failure is adjacent and worse: the run went ~9 hours with **no watcher at all**,
+  and that gap was then misattributed to this watcher. One entry, wrong, hiding a
+  bigger one.
+- **Phase budget "raised against an already-exonerated cause" (08-10 row 11) has
+  the ordering backwards.** Raising it 1h to 5h *was* the experiment that
+  exonerated it. The narrower true failure: the cheap check of whether cuts were
+  logged at all could have preceded the five-hour experiment.
+- **Oracle warm-start "flagged only after reporting +17.9pp" (08-10 row 23) is
+  wrong.** The number, the "hand-written" correction and the warm-start caveat are
+  all in the **same message**. The mislabel stood ~6h while the arm ran; the
+  disclosure was not late.
+- **"Got approval for a two-stage eval" (05-26 row 11): approval was never
+  given.** The user's next message was "is that how the paper does it", which
+  prompted the first read of §3.1.
+- **Bibliography (08-10 row 25): every number was wrong, three times.** Ledger:
+  31 entries, five invented. Verifier: 38, 4, 6. Direct count: **38 entries, 5
+  `% VERIFY`, 8 `TODO-AUTHORS`, 6 with no author field.**
+- **Coercion (08-10 row 6): 8.5% belongs to a different measurement set.** The
+  matched set is no-memory 2.1%, trained 7.0%, frontier 9.1%.
+- **Dead judge (07-02 row 1): the agent first DEFENDED the setting** ("intentional
+  for that prompt format, TRL is fine"), and the user supplied the truncation
+  mechanism. The row implies the agent diagnosed it after the question.
+- **Doubled verl batch (07-29 row 7): worse than recorded, and differently.** The
+  restart was offered twice but framed *only* as a throughput and rate-limit
+  lever, never as 2× the paper's Table 4 batch. The user was never given the
+  paper-parity framing to decide on, so "flagged three times, never actioned"
+  misplaces the responsibility.
+- **At least one incident is double-entered** (the reward level-vs-variance
+  correction appears under both 07-29 and 08-10), so the 185 total is inflated by
+  an unknown small amount.
+
+## Cost figures: the ones that did not survive
+
+| figure as written | verified |
+|---|---|
+| ~8 GPU-days lost to group collapse | ~8 **box**-days = **~64 GPU-days** |
+| ~2.5h of 8×H100 idle across FFT attempts | **appears nowhere**; fabricated |
+| a `git add` would have staged 123 GB | **no size figure exists** at that incident, and `git add` stages a symlink as a link |
+| retry budget 10× the collective watchdog | **~3.3×** (~100 min vs 30). The 10 was the retry count |
+| "measured 3.5h" eval | **3.2 to 5.4 hours per arm** |
+| talked itself out of the fix for ~1.5h | **~12.9 hours** |
+| API gate blocked ~45 min | **1h42m** |
+| proxy eval wiped 25 min later | **36 min** |
+| watchers exited on benign matches ≥5 times | **3** in that window |
+| ~1 day idle awaiting a "go" | **42h45m** |
+| first run "24h", the "18h run" | **~22h** and **16.7h** |
+| ~10 min before the real timeout | **8.6 min** |
+| the false env comment stood ~3 months | **2 months 18 days** |
+| wall-clock estimate chain incl. "5.5 days" | 5.5 was a *stop-at-step-35 option*, not an estimate of the same quantity |
+
+**Idle GPU time is the exception, and it runs the other way.** "Roughly a week"
+is at least **8.9 days** on this ledger's own incomplete list and about **11.8
+days** once three omitted windows are added (11.5h, 11.5h, 25.5h). Some of those
+windows were partly gated on a user reply; the four-day one spans a period with no
+user messages at all.
+
+## What the verification pass says about the ledger
+
+The incidents are real: **not one was fabricated across 185 rows.** What drifted
+was quantities, in both directions, with no self-serving pattern. Durations became
+round numbers, ratios inherited the wrong operand, hedges were reported as
+confident attributions, and where no figure existed one was supplied. The single
+largest error understated the cost of our own worst bug by 8×.
+
+Also worth recording: **the audit of the audit was wrong too**, in the same way and
+on the same kind of quantity. The bibliography count went through three passes and
+three answers on a file countable in one command. Verification reduces the error
+rate; it does not zero it, and one more pass would probably find more.

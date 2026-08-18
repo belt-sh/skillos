@@ -120,9 +120,17 @@ out-of-memory failure requesting 4.64 GiB was answered by offloading optimizer
 state, freeing about 8 GiB. The next attempt requested 14.21 GiB, which is the
 logits tensor, `per_device x sequence x vocabulary`, computable before the first
 launch. Roughly four GPU-hours to learn that the fix had been aimed at the wrong
-tensor. The project derived the right rule three times and applied it late each
-time: **when removing a supposed cause does not move the number, the cause was
-wrong.**
+tensor.
+
+The rule the project eventually derived is **when removing a supposed cause does
+not move the number, the cause was wrong**, and verification corrected our own
+account of how we got there. An earlier draft said a phase budget had been raised
+"against an already-exonerated cause". The ordering was backwards: raising it 1h
+to 5h *was* the experiment that exonerated it, since the measured positions did
+not move and zero cuts were logged, which is what exposed the real cause. The
+failure there is narrower than we wrote, and it is a failure of sequencing rather
+than of reasoning: the cheap check of whether cuts were being logged at all could
+have come before the five-hour experiment rather than after.
 
 **Comparing across measurement epochs.** A single no-memory control, measured
 once in May against a hosted endpoint, was reused for ten weeks as the reference
@@ -321,8 +329,13 @@ What the verifiers overturned in our own ledger:
 - **Counts that were too high.** "Watchers exited on benign matches ≥5 times"
   is verifiable at 3 in that window. A monitor-narrowing incident listed
   `Traceback` among the deleted patterns; `Traceback` was never deleted.
-- **Bibliography numbers.** "31 entries, five with invented authors" is
-  38 entries, 5 marked for verification and 8 missing author data.
+- **Bibliography numbers, three times over.** The ledger said "31 entries, five
+  with invented or unknown authors". A verifier said 38 entries, 4 flagged for
+  verification, 6 with no author field. A direct count says **38 entries, 5
+  flagged `% VERIFY`, 8 flagged `TODO-AUTHORS`, of which 6 carry no author field
+  at all.** Three passes, three different answers, on a file that can be counted
+  exactly in one command. The ledger, the audit of the ledger, and the audit of
+  the audit were each wrong in a different way.
 
 And one correction in the other direction, which is the more interesting kind:
 the first two days' failure was recorded as three bad baselines measured against a
