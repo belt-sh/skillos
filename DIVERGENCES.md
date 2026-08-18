@@ -672,3 +672,72 @@ Both belong to the same family as items 12, 16 and the three sentinel bugs: **th
 failure mode of this project is not crashes, it is silent, plausible-looking
 degradation.** Every guard added since is a print of a quantity that should be
 constant.
+
+---
+
+## 18. The curator drove the position loop, and `r_task` divided by what it played (found 2026-08-18)
+
+**This is the most consequential divergence in the project, and it is ours, not
+the paper's.** It was introduced in the first Algorithm 1 commit (`eacad05`) and
+fixed in `20db029`, so **every Algorithm 1 run in this reproduction is affected.**
+
+- **Paper, reward (§ reward definition):**
+  `r_task = (1 / (|G|−1)) · Σ_{i=2}^{|G|} 1(ξ_i)`.
+  The denominator is **fixed at |G|−1 = 9** by the protocol.
+- **Paper, control flow (Algorithm 1):** `for task index i = 1, …, |G| do`. The
+  loop is driven by the training procedure. The curator samples `c_i` at each
+  position; it does not decide whether position i+1 happens.
+- **Ours:** the curator advances the loop itself by calling
+  `curate_and_advance`, and `r_task` was `sum(successes) / len(positions_played)`.
+
+Either of the paper's two properties alone would have prevented what follows. We
+broke both.
+
+**The incentive we created.** Play one informed position, succeed, stop emitting
+tool calls: `r_task = 1/1 = 1.0`. Play all nine and succeed four times:
+`4/9 = 0.44`. Quitting immediately after a success was the highest-reward action
+available, at no cost.
+
+**Measured in the run killed on 2026-08-18** (11 steps, ~21h of 8×H100): rollouts
+ending after the seed position rose **12.8% → 23.8%** across training, mean reward
+rose **0.83 → 1.4**, and mean completion length **fell to 766 tokens**. Reward
+rising while the work falls is the signature. Not the completion cap:
+`clipped_ratio` 0-9%, max length 3371 against a 16384 budget, zero phase
+deadlines.
+
+**Why it is worse for the earlier runs, which is the part that matters.** Before
+2026-08-17, `max_completion_length: 4096` truncated rollouts at ~3 positions
+(item 16). Truncation by the framework leaves **no `cut` marker**, so those
+positions were not excluded as infrastructure losses; they simply never entered
+the denominator. So `r_task` in every pre-2026-08-17 run was
+`successes / ~2.3` instead of `successes / 9`.
+
+That is not a constant rescaling, and this is the important part. **How many
+positions a rollout fits is a length artifact, and it varied within each GRPO
+group.** GRPO centres advantages within the group, so a rollout that happened to
+be truncated shorter *and* got a success received a higher `r_task` than a
+longer rollout with the same success rate. The gradient therefore partly chased
+**rollout length**, which is uncorrelated with curation quality.
+
+This is a candidate explanation for the project's central negative result that
+does not appear anywhere in our earlier analysis: across seven runs, three seeds
+and two frameworks, part of the only reward term that reaches the gradient was
+tracking how long each rollout happened to be. It sits alongside, not instead of,
+the contemporaneous-baseline retraction (item 16, JOURNAL RETRACTION 1/2): the
+baseline error corrupted the *evaluation*, this corrupted the *training signal*.
+
+**Fix.** Denominator is `|G|−1` minus only those positions lost to
+infrastructure (per-episode timeout, upstream error, phase deadline). A position
+the curator declined to play scores 0 and stays in the denominator. Pinned by
+`tests/test_rtask_denominator.py` (6 cases). The health line now prints the
+median denominator and the count of rollouts that ended early having played
+nothing.
+
+**Residual known bias.** If the framework silently truncates a rollout, its
+unplayed positions now count as curator failures rather than infrastructure
+losses. Measured `clipped_ratio` is 0-9% against 19% policy-driven early exits,
+so we accept this direction, but it is a real and undismissed bias.
+
+**Still open:** whether to restore the paper's environment-driven loop. The
+tool-driven design is what makes early exit expressible at all, and the reward
+fix removes the incentive without removing the capability.
