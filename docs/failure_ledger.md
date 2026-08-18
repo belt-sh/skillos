@@ -35,14 +35,24 @@ flagged as filename-only had already been fixed to grep staged *content*
 finding was also checked against the *live* run rather than the archive — the
 `save_steps`-on-resume override — and the current run is not exposed.
 
-Two slices overlapped in time, which turned into a control: the group collapse,
-the `save_steps` loss, the serial eval relaunch and one post-hoc "corroboration"
-were each found independently by two reviewers who could not see each other's
-output. Where they disagreed it was on magnitude (15h vs 22h of lost training),
-not on whether the failure happened.
+~~Two slices overlapped in time, which turned into a control: four incidents were
+found independently by two reviewers who could not see each other's output. Where
+they disagreed it was on magnitude (15h vs 22h of lost training), not on whether
+the failure happened.~~
 
-**Total: 185 entries.** This is a lower bound. The digest truncates long tool
-results, so failures visible only inside a large output are under-counted.
+**RETRACTED, see the verification pass at the end of this file.** Both reviewers
+read overlapping ranges of the *same* digest of the *same* transcript, so their
+agreement shows the extraction is reproducible across reader contexts, not that it
+is true. And the 15h-vs-22h "disagreement" was manufactured here: 14.6h of
+completed training sat inside a 21h55m wall, the second reviewer had *labelled* its
+figure "wall", and this summary deleted the qualifier. Both readers were right;
+the synthesis was wrong. The real overlap is at least seven incidents, not four.
+
+**Total: 185 entries, approximate.** At least one incident is double-entered, so
+the figure is inflated by an unknown small amount; the digest also truncates long
+tool results, so failures visible only inside a large output are missed. Trust the
+ratio (about half absent from the records, about a fifth documented with cause),
+not the integer.
 
 ## Taxonomy
 
