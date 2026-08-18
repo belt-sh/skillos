@@ -16,6 +16,7 @@ import datetime
 import os
 import random
 import sys
+import time
 
 import torch
 import torch.distributed as dist
@@ -120,6 +121,36 @@ def build_dataset(num_episodes: int, group_size: int,
     })
 
 
+def _complete_the_protocol(environments: list[Algo1CuratorEnv]) -> None:
+    """Run every position the curator left unplayed, across all envs at once.
+
+    Envs are completed concurrently with each other, and each env completes its
+    own missing positions concurrently, because a frozen repo makes positions
+    independent. Real parallelism is bounded by the alfworld env pool, which
+    blocks rather than over-subscribing.
+    """
+    import concurrent.futures as _cf
+
+    todo = [e for e in environments if e.missing_positions()]
+    if not todo:
+        return
+    budget = float(os.environ.get("SKILLOS_COMPLETION_BUDGET_S", "3600"))
+    deadline = time.time() + budget
+    n_missing = sum(len(e.missing_positions()) for e in todo)
+    print(f"[algo1] completing the protocol: {len(todo)}/{len(environments)} "
+          f"rollouts ended early, {n_missing} positions to run, "
+          f"budget {budget:.0f}s", file=sys.stderr, flush=True)
+
+    with _cf.ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        futs = [pool.submit(e.complete_unplayed_positions, deadline) for e in todo]
+        for f in futs:
+            try:
+                f.result(timeout=max(1.0, deadline - time.time()) + 60)
+            except Exception as exc:  # never let this kill the step
+                print(f"[algo1] protocol completion failed for one rollout: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+
+
 def reward_func(environments: list[Algo1CuratorEnv], **kwargs) -> list[float]:
     """Algorithm 1 reward: each env recorded |G| executor results during its
     own tool-loop. We finalize per-env, then neutralise rollouts that produced
@@ -145,6 +176,21 @@ def reward_func(environments: list[Algo1CuratorEnv], **kwargs) -> list[float]:
     the env module rather than assuming, and fall back to treating the batch as
     one group if it does not divide evenly.
     """
+    # STEP 0: finish the protocol before scoring it (DIVERGENCES #18).
+    #
+    # The paper's Algorithm 1 runs the executor at all |G| positions; the curator
+    # does not choose whether position i+1 happens. In this TRL port it advances
+    # the loop with a tool call, so it can stop early, and 19-24% of rollouts did.
+    # Scoring only what it chose to play made quitting after a success the
+    # highest-reward action available; scoring the rest as failures is harsher
+    # than the paper. So we run them, with S frozen at wherever the curator left
+    # it, which is exactly "the curator wrote nothing further".
+    #
+    # Bounded by SKILLOS_COMPLETION_BUDGET_S so a rank with many early exits
+    # cannot skew the next collective. Positions we abandon to that budget are
+    # marked as infrastructure losses and leave the denominator.
+    _complete_the_protocol(environments)
+
     rewards = [env._finalize_reward() for env in environments]
     unmeasured = [bool(getattr(env, "r_task_unmeasured", False))
                   for env in environments]

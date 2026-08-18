@@ -427,6 +427,89 @@ class Algo1CuratorEnv:
         self._task_descriptions[position] = result.get("task_description", "")
         return result
 
+    # ---- Paper-faithful loop completion -------------------------------
+
+    def missing_positions(self) -> list[int]:
+        """Positions 1..|G|-1 that never ran because the rollout ended early."""
+        return list(range(len(self._executor_results), _group_size))
+
+    def complete_unplayed_positions(self, deadline: float | None = None) -> dict:
+        """Run the executor at every remaining position, with S frozen.
+
+        WHY THIS EXISTS (DIVERGENCES #18). The paper's Algorithm 1 drives the
+        loop itself:
+
+            for task index i = 1, ..., |G| do
+                S_tilde <- BM25(x_i, S);  xi_i <- RunTask(...);  c_i ~ pi_S(...)
+
+        The executor runs at every position regardless of what the curator does.
+        A curator that emits no useful operations simply leaves S unchanged and
+        the loop continues. There is no state in which the curator declines to
+        advance, because advancing is not its decision.
+
+        In our TRL port the curator advances the loop by calling
+        `curate_and_advance`, so it CAN stop early by emitting no tool call, and
+        19% to 24% of rollouts did. Two wrong ways to score that:
+
+          - divide r_task by positions played (the original bug): quitting after
+            one success scores 1.0 and beats every honest rollout;
+          - count unplayed positions as failures (the first fix): harsher than
+            the paper, which would have RUN those positions against the existing
+            repo, where they can succeed.
+
+        So run them. S is frozen from the moment the curator stopped, which is
+        exactly "the curator wrote nothing further". Positions are independent
+        under a frozen repo, so they run concurrently; the alfworld env pool
+        bounds real parallelism.
+
+        Returns a small dict for the health line. Idempotent.
+        """
+        missing = self.missing_positions()
+        if not missing:
+            return {"filled": 0, "abandoned": 0}
+
+        results: dict[int, dict] = {}
+        if deadline is not None and time.time() > deadline:
+            pending = missing
+        else:
+            pending = []
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=len(missing)) as pool:
+                futs = {pool.submit(self._run_executor_at, p): p for p in missing}
+                for fut in concurrent.futures.as_completed(futs):
+                    p = futs[fut]
+                    try:
+                        timeout = None
+                        if deadline is not None:
+                            timeout = max(1.0, deadline - time.time())
+                        r = fut.result(timeout=timeout)
+                        r["unattended"] = True   # ran, but curator added nothing
+                        results[p] = r
+                    except Exception:
+                        pending.append(p)
+                # positions we never got to
+                pending.extend(p for p in missing
+                               if p not in results and p not in pending)
+
+        for p in missing:
+            if p in results:
+                self._executor_results.append(results[p])
+            else:
+                # Our wall-clock ran out, not the curator's fault: mark as an
+                # infrastructure loss so it leaves the denominator entirely.
+                self._executor_results.append({
+                    "task_description": f"<completion-budget-position-{p}>",
+                    "trajectory": [], "success": None, "cut": True,
+                    "upstream_error": True, "steps": 0,
+                    "gamefile": "", "skills_text": "",
+                })
+        filled = len(results)
+        print(f"[algo1] completed {filled}/{len(missing)} unplayed positions "
+              f"slot={self._slot} group={self._group_id} "
+              f"({len(pending)} abandoned to the completion budget)",
+              file=sys.stderr, flush=True)
+        return {"filled": filled, "abandoned": len(missing) - filled}
+
     # ---- Reward -------------------------------------------------------
 
     def _finalize_reward(self) -> float:
@@ -488,7 +571,9 @@ class Algo1CuratorEnv:
                 d = r.get("task_description", "")
                 key = ("timeout" if d.startswith("<timeout-position") else
                        "deadline" if d.startswith("<cut-position") else
-                       "upstream" if d.startswith("<executor-error") else "other")
+                       "upstream" if d.startswith("<executor-error") else
+                       "completion-budget"
+                       if d.startswith("<completion-budget-position") else "other")
                 cuts[key] = cuts.get(key, 0) + 1
             why = ("rollout ended after the seed position, nothing was cut"
                    if attempted == 0 else

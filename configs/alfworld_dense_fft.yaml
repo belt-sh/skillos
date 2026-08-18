@@ -37,7 +37,7 @@
 # Launch via ./run_algo1_fft.sh  (uses configs/accelerate_zero3.yaml).
 
 model: Qwen/Qwen3-8B
-output_dir: ./output/alfworld-dense-fft-seed2r
+output_dir: ./output/alfworld-dense-fft-paperloop
 
 epochs: 1
 max_steps: 60                     # paper budget (Table 4)

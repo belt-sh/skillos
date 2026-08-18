@@ -47,6 +47,12 @@ export SKILLOS_EXECUTOR_RETRY_PARSE=1     # reformat before coercing (0.15% coer
 
 # The two knobs this run exists to change.
 export SKILLOS_PHASE_BUDGET_S="${SKILLOS_PHASE_BUDGET_S:-18000}"
+# Wall-clock for running positions the curator left unplayed (DIVERGENCES #18).
+# The paper's loop runs every position; ours lets the curator stop, so we finish
+# the protocol ourselves before scoring it. Positions abandoned to this budget
+# are marked infrastructure losses and leave the r_task denominator, so the
+# budget can never charge the curator for our impatience.
+export SKILLOS_COMPLETION_BUDGET_S="${SKILLOS_COMPLETION_BUDGET_S:-5400}"
 export SKILLOS_NCCL_TIMEOUT_S="${SKILLOS_NCCL_TIMEOUT_S:-36000}"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
