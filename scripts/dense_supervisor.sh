@@ -11,7 +11,7 @@
 # healthy run mid-step. 6h.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-OUT=output/alfworld-dense-fft-seed1
+OUT=output/alfworld-dense-fft-seed2r
 STALL_S="${DENSE_STALL_S:-21600}"     # 6h with no log growth = stalled
 POLL_S="${DENSE_POLL_S:-600}"
 MAX_RESTARTS="${DENSE_MAX_RESTARTS:-12}"

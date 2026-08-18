@@ -26,7 +26,7 @@
 # change costs a restart, which costs the ~1.9h step in flight.
 set -uo pipefail
 
-OUT="${1:-output/alfworld-dense-fft-seed1}"
+OUT="${1:-output/alfworld-dense-fft-seed2r}"
 DEST="$OUT/eval_weights"
 POLL="${ARCHIVE_POLL_S:-120}"
 FINAL_STEP="${ARCHIVE_FINAL_STEP:-60}"

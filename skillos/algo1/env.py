@@ -120,6 +120,7 @@ class Algo1CuratorEnv:
         # reward_func must neutralise its advantage rather than trust r_task=0.
         self.r_task_unmeasured = False
         self.n_task_measured = 0
+        self.n_task_denominator = 0
 
     # ---- TRL hooks ----------------------------------------------------
 
@@ -145,6 +146,7 @@ class Algo1CuratorEnv:
         self.done = False
         self.r_task_unmeasured = False
         self.n_task_measured = 0
+        self.n_task_denominator = 0
 
         # Synchronized rollout deadline. All rollouts in a step reset within a
         # quick serial loop, so per-rollout deadlines are ~aligned. Once a
@@ -496,9 +498,44 @@ class Algo1CuratorEnv:
                   file=sys.stderr, flush=True)
         else:
             self.r_task_unmeasured = False
+            # DENOMINATOR IS THE PROTOCOL, NOT WHAT THE POLICY CHOSE TO PLAY.
+            #
+            # This used to be `sum(successes) / len(tail)`, i.e. divided by the
+            # number of positions actually played. That made ending the rollout
+            # early the single highest-reward action available: play one informed
+            # position, succeed, stop, and score r_task = 1.0, where playing all
+            # nine and succeeding four times scores 0.44. The curator paid
+            # nothing for the eight positions it skipped.
+            #
+            # Measured consequence in the run killed on 2026-08-18 (11 steps,
+            # ~21h of 8xH100 discarded): rollouts ending after the seed position
+            # rose from 12.8% to 23.8% across training, mean reward rose 0.83 ->
+            # 1.4, and mean completion length FELL to 766 tokens. Reward going up
+            # while the work goes down is the signature.
+            #
+            # The paper's r_task is the mean over positions 2..|G|, so the
+            # denominator is |G|-1 = 9, fixed. The only positions that may leave
+            # the denominator are those lost to INFRASTRUCTURE (per-episode
+            # timeout, upstream error, phase deadline), because those are our
+            # failure and not the curator's. A position the curator simply never
+            # played is a position it declined to curate for, and it scores 0.
+            informed_total = _group_size - 1
+            attempted = self._executor_results[1:]
+            infra_lost = sum(1 for r in attempted if r.get("cut"))
+            denom = informed_total - infra_lost
             successes = [float(r.get("success") or 0.0) for r in tail]
-            r_task = sum(successes) / len(successes)
+            if denom <= 0:
+                # Every protocol position was lost to infrastructure.
+                self.r_task_unmeasured = True
+                r_task = 0.0
+            else:
+                # Numerator counts only real successes; positions never attempted
+                # contribute 0 and remain in the denominator.
+                r_task = sum(successes) / denom
         self.n_task_measured = len(tail)
+        self.n_task_denominator = (
+            (_group_size - 1) - sum(1 for r in self._executor_results[1:] if r.get("cut"))
+        )
 
         r_fc = reward_function_call(self._ops_applied)
 

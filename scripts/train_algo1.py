@@ -207,9 +207,23 @@ def _log_measurement_health(environments, rewards, n_neutralised: int) -> None:
         coercion = f"{coerced}/{calls} actions coerced ({coerced / max(calls, 1):.1%})"
     except Exception:
         coercion = "coercion telemetry unavailable"
+    # EARLY-ENDED share is the number that would have caught the r_task
+    # denominator bug on step 2 instead of step 11. A rollout that ends after the
+    # seed position played no informed position at all; before 2026-08-18 that
+    # scored r_task over a denominator of whatever it *did* play, so stopping
+    # early after one success paid better than playing the protocol out. The
+    # share rose 12.8% -> 23.8% across 11 steps while mean reward rose and mean
+    # completion length fell, and nothing printed it.
+    early = sum(1 for env in environments
+                if int(getattr(env, "n_task_measured", 0)) == 0
+                and int(getattr(env, "n_task_denominator", 0)) > 0)
+    denoms = [int(getattr(env, "n_task_denominator", 0)) for env in environments]
+    median_denom = sorted(denoms)[n // 2] if n else 0
     print(f"[algo1] reward health: {n} rollouts, "
           f"r_task measured from median {median} positions "
-          f"(min {counts_sorted[0] if n else 0}, max {counts_sorted[-1] if n else 0}), "
+          f"(min {counts_sorted[0] if n else 0}, max {counts_sorted[-1] if n else 0}) "
+          f"over median denominator {median_denom}, "
+          f"{early} ended early with 0 played, "
           f"{n_neutralised} neutralised as unmeasured; {coercion}",
           file=sys.stderr, flush=True)
 
