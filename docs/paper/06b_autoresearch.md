@@ -326,9 +326,32 @@ the fix. Meanwhile the same row understated the underlying error, because the
 paper's correct training length was printed in a repo config the agent had read
 **five minutes before the first launch.**
 
-The pattern in these corrections is consistent and worth stating: **the incidents
-were real and the quantities attached to them drifted upward.** Durations became
-round numbers, ratios inherited the wrong operand, and a plausible cause was
-attached where the transcript recorded a hedge. That is the same failure mode
-§6.x.2 documents in the research itself, reproduced by the audit of it, and caught
-only because the audit was itself audited against primary sources.
+**A tidy pattern we published and then had to withdraw.** Our first summary of
+these corrections said the quantities had "drifted upward", which is the shape one
+expects from a narrative-building process and reads well. The remaining verifiers
+falsified it. The errors run in both directions, and the largest ones run the
+other way:
+
+- The cost of our own worst bug was understated by **8×** (8 GPU-days for
+  ~64).
+- The idle-GPU total, which is time lost to the agent stopping rather than to any
+  bug, was **understated**. Our "roughly a week" is at least 8.9 days on the
+  ledger's own incomplete list and about **11.8 days** once three windows we had
+  omitted entirely are included (two of 11.5 hours, one of 25.5).
+- A delay in applying a fix the agent had talked itself out of was recorded as
+  ~1.5 hours; it was **~12.9 hours**.
+- An eval "measured at 3.5h" was 3.2 to 5.4 hours per arm; a gate that "blocked
+  45 minutes" blocked 1h42m; a probe "wiped 25 minutes later" was 36.
+
+Overstatements exist too: a fabricated "~2.5h of idle GPU" that appears nowhere,
+a "123 GB" attached to the wrong incident, a ratio of 10× that was 3.3×. But there
+is no self-serving direction, and the honest characterisation is narrower and less
+quotable than the one we first wrote: **round numbers, borrowed operands, and
+under-measured durations, in whichever direction the nearest plausible figure
+happened to lie.** Where no figure existed, one was supplied.
+
+We are keeping this paragraph in its corrected form rather than silently fixing
+it, because the withdrawn version is itself an instance of what §6.x.2 describes:
+a clean causal story fitted to real numbers, written confidently, and falsified by
+the next measurement. It survived one round of verification and died in the
+second.
