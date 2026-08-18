@@ -26,14 +26,29 @@ failure they found against the four records the project had been keeping (a
 running journal, a divergences ledger, a results report, and one postmortem).
 Each failure was labelled DOCUMENTED, PARTIAL, or MISSING.
 
-The audit was not self-assessment. The reviewers had the transcript, not the
-memory of it, and no access to each other's output. Two slices overlapped in
-time, which gave an unplanned control: four incidents were found independently by
-two reviewers, agreeing on the failure and disagreeing only on magnitude (one
-put a lost-training incident at 15 hours, the other at 22). Of the reviewers'
-claims about what was absent from the records, 29 were re-verified by direct
-search, and one was wrong: a licence-compliance guard the reviewer flagged as
-inadequate had already been fixed.
+The audit was not self-assessment: the reviewers had the transcript, not the
+memory of it, and no access to each other's output. **It is also not
+triangulation, and an earlier draft of this section overstated it.** Two slices
+overlapped in time and at least seven incidents were found twice, which we first
+described as independent cross-confirmation. A verification pass rejected that
+framing, correctly. Both reviewers read overlapping ranges of the *same*
+mechanical digest of the *same* transcript, so their agreement demonstrates that
+the extraction is reproducible across reader contexts, not that the extraction is
+true. Every figure they agreed on is a literal string in the source.
+
+The one genuinely useful thing the overlap produced was a disagreement, and the
+reconciliation we published for it was wrong. One reviewer put a lost-training
+incident at ~15 hours and the other at ~22, which we reported as a magnitude
+dispute. It was not: 14.6 hours of completed training time sat inside a 21h55m
+wall, the second reviewer had labelled its figure "wall", and our summary erased
+the qualifier to manufacture a conflict. **Both readers were right and the
+synthesis was wrong**, which argues for checking figures against timestamps
+rather than for trusting reviewer consensus.
+
+Therefore a second pass re-verified every row against the raw transcript, the
+installed libraries and git history, with instructions to default to UNSUPPORTED.
+That pass is the reason the numbers below are stated as they are, and it changed
+several: see §6.x.6.
 
 The full ledger is released with the artifact. The counts:
 
@@ -51,8 +66,9 @@ visible only inside a large log are under-counted.
 
 Fourteen recurring modes emerged. We report the six with the largest
 consequences for the science, since the operational ones (self-inflicted process
-kills, orphaned monitors, roughly a week of idle GPU time across seven incidents)
-cost money rather than validity.
+kills, orphaned monitors, and idle GPU time across at least seven incidents of
+which only one, a 44-hour stall, is precisely established) cost money rather than
+validity.
 
 **A sentinel that does not say why.** At least eight code paths substituted a
 plausible value for a measurement that never happened: an unparseable action
@@ -73,8 +89,9 @@ keeps a long job alive is locally the right call at 3 a.m. and globally fatal to
 the result.
 
 **Health metrics validated against each other, never against ground truth.**
-Three consecutive multi-day runs, about eight GPU-days, trained on ten fixed
-tasks because an environment identifier was always zero. Reward, KL, gradient
+Three consecutive runs, two of them multi-day and about eight *box*-days on eight
+H100s (~64 GPU-days), trained on ten fixed tasks because an environment
+identifier was always zero. Reward, KL, gradient
 norm, and a purpose-built degeneracy tripwire all looked healthy throughout. The
 tripwire asserted that reward must vary within a GRPO group, and a second bug,
 per-rank seed divergence, satisfied it. A check that asserts the absence of a
@@ -267,3 +284,51 @@ its absence.
    audited by something that is not the process that made the mistakes. Half of
    what happened here was missing from a record kept diligently and in good faith
    throughout.
+
+## 6.x.6 What the verification pass changed
+
+Reported because a ledger of failures assembled by the same kind of process that
+produced the failures should not be trusted on its own authority. Eight verifier
+agents re-checked every row against the raw transcript, the installed libraries
+and git history, with instructions to default to UNSUPPORTED. Every incident
+survived; **the numbers attached to them did not.**
+
+What the verifiers overturned in our own ledger:
+
+- **A units error of 8×.** "~8 GPU-days lost to the group-collapse bug" is
+  ~8 *box*-days on eight H100s, i.e. ~64 GPU-days.
+- **Fabricated or unsupported cost figures.** "~2.5h of 8×H100 idle" across the
+  first FFT attempts appears nowhere in the transcript. Neither does the "123 GB"
+  that a stray `git add` would supposedly have staged, and `git add` on a symlink
+  stages the link, not the target. An eval described as "measured 3.5h" was
+  measured at 3.2 to 5.4 hours per arm.
+- **A ratio off by 3×.** A retry budget described as "10× the collective watchdog"
+  was ~3.3× (~100 minutes against 30). The 10 was the number of retry attempts.
+- **A row that was simply false.** We recorded a monitor as having died silently
+  during an unattended run. It had not died; only the agent's task-list view was
+  lost across a context compaction, and the monitor then caught the crash 16
+  minutes later. The real failure was adjacent and worse: the run had gone ~9
+  hours with no watcher at all, and the agent misdescribed that gap as the
+  watcher's fault. One entry became two, with a different category.
+- **Overstated confidence in our own wording.** "Attributed confidently to
+  overfitting" was in fact hedged between two named hypotheses. "Got approval for
+  a two-stage eval" is wrong: approval was never given.
+- **Counts that were too high.** "Watchers exited on benign matches ≥5 times"
+  is verifiable at 3 in that window. A monitor-narrowing incident listed
+  `Traceback` among the deleted patterns; `Traceback` was never deleted.
+- **Bibliography numbers.** "31 entries, five with invented authors" is
+  38 entries, 5 marked for verification and 8 missing author data.
+
+And one correction in the other direction, which is the more interesting kind:
+the first two days' failure was recorded as three bad baselines measured against a
+crippled executor. Only one of the three was; the other two were measured after
+the fix. Meanwhile the same row understated the underlying error, because the
+paper's correct training length was printed in a repo config the agent had read
+**five minutes before the first launch.**
+
+The pattern in these corrections is consistent and worth stating: **the incidents
+were real and the quantities attached to them drifted upward.** Durations became
+round numbers, ratios inherited the wrong operand, and a plausible cause was
+attached where the transcript recorded a hedge. That is the same failure mode
+§6.x.2 documents in the research itself, reproduced by the audit of it, and caught
+only because the audit was itself audited against primary sources.
