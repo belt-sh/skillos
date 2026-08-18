@@ -131,18 +131,18 @@ def _complete_the_protocol(environments: list[Algo1CuratorEnv]) -> None:
     """
     import concurrent.futures as _cf
 
-    todo = [e for e in environments if e.missing_positions()]
+    todo = [e for e in environments if e._missing_positions()]
     if not todo:
         return
     budget = float(os.environ.get("SKILLOS_COMPLETION_BUDGET_S", "3600"))
     deadline = time.time() + budget
-    n_missing = sum(len(e.missing_positions()) for e in todo)
+    n_missing = sum(len(e._missing_positions()) for e in todo)
     print(f"[algo1] completing the protocol: {len(todo)}/{len(environments)} "
           f"rollouts ended early, {n_missing} positions to run, "
           f"budget {budget:.0f}s", file=sys.stderr, flush=True)
 
     with _cf.ThreadPoolExecutor(max_workers=len(todo)) as pool:
-        futs = [pool.submit(e.complete_unplayed_positions, deadline) for e in todo]
+        futs = [pool.submit(e._complete_unplayed_positions, deadline) for e in todo]
         for f in futs:
             try:
                 f.result(timeout=max(1.0, deadline - time.time()) + 60)

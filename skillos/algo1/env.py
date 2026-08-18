@@ -428,12 +428,23 @@ class Algo1CuratorEnv:
         return result
 
     # ---- Paper-faithful loop completion -------------------------------
+    #
+    # BOTH METHODS BELOW MUST STAY UNDERSCORE-PREFIXED. TRL builds the curator's
+    # tool list from `inspect.getmembers(env, predicate=inspect.ismethod)` and
+    # takes every name that does not start with "_" (grpo_trainer.py:501-504).
+    # The first version of `complete_unplayed_positions` was public, so TRL tried
+    # to publish it to the model as a callable tool and died generating its JSON
+    # schema (`DocstringParsingException`, no description for `deadline`). The
+    # crash was lucky: had the docstring been formatted the way TRL wanted, the
+    # policy would have been handed a tool that finishes its protocol for it.
+    # Any helper added to this class is a tool by default. Name it with a leading
+    # underscore unless you intend the curator to call it.
 
-    def missing_positions(self) -> list[int]:
+    def _missing_positions(self) -> list[int]:
         """Positions 1..|G|-1 that never ran because the rollout ended early."""
         return list(range(len(self._executor_results), _group_size))
 
-    def complete_unplayed_positions(self, deadline: float | None = None) -> dict:
+    def _complete_unplayed_positions(self, deadline: float | None = None) -> dict:
         """Run the executor at every remaining position, with S frozen.
 
         WHY THIS EXISTS (DIVERGENCES #18). The paper's Algorithm 1 drives the
@@ -464,7 +475,7 @@ class Algo1CuratorEnv:
 
         Returns a small dict for the health line. Idempotent.
         """
-        missing = self.missing_positions()
+        missing = self._missing_positions()
         if not missing:
             return {"filled": 0, "abandoned": 0}
 

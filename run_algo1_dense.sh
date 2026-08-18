@@ -66,6 +66,14 @@ echo "  PHASE_BUDGET_S=$SKILLOS_PHASE_BUDGET_S  NCCL_TIMEOUT_S=$SKILLOS_NCCL_TIM
 echo "  CHECKPOINT=${CHECKPOINT:-<fresh>}"
 echo "  watch: grep 'reward health' $LOG   # median measured positions must be ~9"
 
+# Fail here, in seconds, rather than ten minutes into a 4-day run. Any public
+# method on the env becomes a curator tool (grpo_trainer.py:501-504); on
+# 2026-08-18 a helper added as public crashed rank 0 during schema generation.
+.venv/bin/python tests/test_env_tool_surface.py || {
+  echo "ABORT: environment tool surface is wrong (see test output above)" >&2
+  exit 1
+}
+
 accelerate launch \
   --config_file configs/accelerate_zero3.yaml \
   -m scripts.train_algo1 --config configs/alfworld_dense_fft.yaml \
