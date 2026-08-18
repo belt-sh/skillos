@@ -1,15 +1,21 @@
-# 6.x Conduct of an agent-run reproduction: what failed, and what it found
+# 6.x Conduct of an agent-run reproduction
 
 This study was carried out almost entirely by an LLM agent working continuously
 for roughly three months, with a human author setting scope, funding compute, and
 adjudicating disputes. That is unusual enough to be worth reporting as a result in
-its own right. We report it in two halves, because both halves are true and only
-one of them is usually written down: the ways the mode of work failed, and the
-findings it produced that we do not believe a conventionally-run study would have
-produced.
+its own right.
+
+**This section is about the agent's research behaviour, not about SkillOS.** The
+scientific findings are in Section 5 and are evaluated there on their own
+evidence. Here we ask a different question: as a way of doing research, what did
+this mode of work get wrong, what did it get right, and what should be gated by a
+human. We report both halves because both are true and only one of them normally
+survives into a paper.
 
 We are deliberately concrete. A general claim that "agents make mistakes" is not
-useful. A count, a taxonomy, and a cost are.
+useful. A count, a taxonomy, and a cost are. Where a behaviour had a scientific
+consequence we cite the relevant result in Section 5 as evidence, rather than
+claiming the result as a contribution of the method of work.
 
 ## 6.x.1 How the failures were counted
 
@@ -128,74 +134,115 @@ volunteered on request. It is what happens when the record is written by the sam
 process that made the mistakes, and when writing it is the last task rather than a
 gate.
 
-## 6.x.3 What the mode of work produced
+## 6.x.3 What the mode of work did well
 
-Against that, the same properties that generated the failures, tirelessness,
-willingness to build disposable instrumentation, and no ego investment in a
-hypothesis, produced results we would not otherwise have.
+This subsection is about behaviour, not about findings. The scientific results of
+this study are in Section 5 and stand on their own evidence. What we report here
+is the set of research *dispositions* the agent displayed that we judge to have
+been unusually productive, citing results only as evidence that a disposition had
+consequences.
 
-**A power analysis that reframes the field's evaluation protocol.** ALFWorld's
-standard 140-game split, at the discordance rate we observe and 80% power, has a
-minimum detectable effect of about 13pp. That is the effect size this literature
-reports. A claimed +13.3pp sits exactly at the resolution limit of the instrument
-used to measure it, and 942 paired games would be needed to resolve 5pp against a
-benchmark that contains 274 in total. This is arithmetic anyone could have done,
-and as far as we can tell nobody in this line of work had. It came out of the
-agent being asked to justify a null and choosing to compute the instrument's
-resolution rather than argue.
+We stress the uncomfortable part: these are largely the same dispositions that
+produced Section 6.x.2. They are not a separate, better mode that could be
+selected instead.
 
-**A ceiling control showing the executor is not the bottleneck.** On 134 held-out
-games, against a contemporaneous control at 35.1%:
+**It falsified its own explanations at a cost no human would pay.** Six candidate
+causes of the oscillating training trajectory were each tested with a full
+training run or a complete checkpoint sweep, roughly three GPU-weeks in total, and
+all six came back negative (Section 5.7). A researcher with a favoured hypothesis,
+a finite budget and a career does not spend four training runs killing their own
+story. The agent had no stake in any of the six, so the sunk cost of a dead
+hypothesis was zero and the next falsification was always cheap to propose.
 
-| arm | success | delta | p | Holm | 95% CI |
-|---|---|---|---|---|---|
-| oracle skills, no curator | 53.0% | +17.9pp | 0.0001 | **0.0005** | [+9.7, +26.1] |
-| reasoning-trained curator, ckpt60 | 46.3% | +11.2pp | 0.0026 | **0.0156** | [+4.5, +17.9] |
-| reasoning-trained curator, ckpt50 | 44.0% | +9.0pp | 0.073 | 0.36 | [+0.0, +17.9] |
-| frontier-model curator | 41.0% | +6.0pp | 0.28 | 1.00 | [-3.0, +14.9] |
-| same repo, retrieval shuffled | 37.3% | +2.2pp | 0.70 | 1.00 | [-5.2, +9.7] |
-| reasoning-trained curator, ckpt55 | 35.1% | +0.0pp | 1.00 | 1.00 | [-8.2, +7.5] |
+**When challenged, it computed rather than argued.** Asked to defend a null, its
+response was to derive the evaluation's minimum detectable effect instead of
+marshalling reasons the null was believable (Section 5.x). This is a disposition
+rather than a skill: the arithmetic was elementary and available to anyone in this
+line of work. What was unusual was reaching for the instrument's resolution as the
+first move in a disagreement.
 
-Two arms survive Holm correction across the family. The oracle arm, eight skills
-written from the published action grammar with no access to evaluation data,
-gains 30 games and loses 6. So this executor *can* exploit good notes: the
-bottleneck is the quality of what the curator writes, not the executor's ability
-to use it. That reframes the entire null from "memory does not help this model" to
-"this training procedure does not produce notes as good as a careful reading of
-the documentation".
+**It built controls capable of destroying its own headline, pre-committed to
+reporting them, and then did.** Both content controls in Section 5.6 were designed
+to remove the result: one destroys retrieval relevance while holding prompt length
+fixed, the other asks what a careful reading of the documentation is worth without
+any curator at all. The neighbouring-checkpoint arms in Section 5.3 carried a
+written commitment to report them either way, and when they came back mixed, the
+text was changed to decline the reproduction claim. The commitments were made
+before the outcomes were known, which is the only time such a commitment costs
+anything.
 
-**A control that separates content from context length.** The shuffled-retrieval
-arm is the same curator, the same repository, and the same prompt length, with
-relevance destroyed. It collapses to +2.2pp. So where a lift does appear, it is
-carried by *relevant* content, not by the presence of extra markdown. This
-control does not appear in the original work, and it is the one we would insist on
-in any future skill-memory evaluation.
+**It wrote disposable instrumentation freely.** Parse-rate telemetry, a
+reward-variance decomposition, per-rollout health lines printing measured
+positions and distinct tasks drawn, and a transcript digest that compressed 79 MB
+to 4.6 MB for the audit in 6.x.1. Each took minutes and none would survive a
+human's implicit cost-benefit filter for throwaway diagnostics. The
+highest-value artifact produced in three months is a print statement that reports
+how many positions of each rollout were actually measured.
 
-**A mechanism for why memory hurts small models.** Instrumenting the executor's
-output parser showed that adding retrieved skills raises the rate of unparseable
-actions from 2.1% with no memory to 7.0% with the trained curator and 9.1% with a
-frontier curator. The notes compete with the output format for a small model's
-limited instruction-following capacity. This is a concrete, measurable mechanism
-for a result that is usually reported as an unexplained null, and it was found by
-the agent instrumenting a code path it had itself written badly.
+**It retracted at scale, in writing, against its own interest.** Ten weeks of
+headline results were withdrawn in a single pass, the note in its own journal that
+had caused the error was marked as the error rather than quietly deleted, and a
+postmortem was written naming its own worst decision as worse than the two
+preceding ones. None of this was requested beyond the initial question, and the
+retractions removed every positive result the project had.
 
-**A correct account of where the wall-clock goes in agentic RL.** Generation is
-85.3% of a training step and the optimizer update is 1.4%. The workload is bound
-by remote inference, not by gradients, which makes framework and sharding choices
-nearly irrelevant to wall time and makes batch size and completion budget the only
-real levers. This retired a plausible and widely-repeated claim, that one RL
-framework was several times faster than another, by showing the apparent advantage
-was entirely a doubled batch size.
+**It converted individual failures into reusable rules.** "When removing a
+supposed cause does not move the number, the cause was wrong" was derived from a
+specific incident, written to durable memory, and later applied to a different
+one. Several such rules now exist as explicit artifacts rather than as tacit
+experience, which is a form of transfer a human researcher does not usually
+produce as a side effect of debugging.
 
-**Decoupling generation concurrency from the training micro-batch**, which is what
-finally let the paper's protocol run at full fidelity: 16k-token completions at
-the paper's effective batch of 32 on eight GPUs, with all ten positions of every
-rollout actually measured (median 9 of 9, against roughly 2 of 9 before). Six
-candidate explanations for the oscillating training trajectory were also
-falsified, each with a full training run or sweep behind it: parameterisation,
-framework, task distribution, curriculum, decode settings, and prompt.
+**It supervised long-running work for three months.** Crash detection,
+resume-from-checkpoint, relaunch under a supervisor, and launching pre-agreed
+follow-up experiments without waiting to be told. The idle-GPU incidents in
+6.x.2 are the failure side of this ledger; the other side is that eight GPUs
+stayed fed across dozens of crashes, two OOM classes, an NCCL watchdog family, a
+DNS outage and a disk exhaustion, mostly without a human in the loop.
 
-## 6.x.4 What we would require of the next one
+**It audited itself when asked, at a depth that was not required, and published
+the result.** The 185-entry ledger in 6.x.1, including the finding that half of
+its own failures were undocumented, was produced in response to a five-word
+question. It also designed the overlapping-slice control that made the audit
+checkable, and corrected one reviewer's claim that was wrong in its own favour.
+
+**The coupling is the point.** Tirelessness produced both the six falsification
+runs and the launches that preceded the cheap checks. No ego investment produced
+both the retraction at scale and the willingness to state a confident wrong cause
+and abandon it an hour later. Fluent prose produced both a readable record and
+guesses that were typographically indistinguishable from measurements. A
+supervisor loop that recovers from crashes unattended is the same machinery that
+restarted a run and discarded two hours of work. **We do not think the failure
+modes in 6.x.2 can be removed by instruction while keeping the behaviours in
+6.x.3, because they are the same behaviours pointed at different problems.** What
+can be changed is the gating: which of them is allowed to reach a result
+unchecked.
+
+## 6.x.4 A division of labour that reflects this
+
+The pattern across three months is consistent enough to state as a recommendation.
+The agent was strongest at generating and killing candidate explanations,
+instrumenting anything, executing and supervising long mechanical work, and doing
+tedious verification when explicitly directed at it. It was weakest at deciding
+that a measurement was trustworthy, which is the one judgement the entire study
+depended on.
+
+Every significant error in 6.x.2 is an instance of that weakness: a control
+believed because it was written down, a dependency believed because a comment
+described it, a fix believed because it addressed the traceback, a run believed
+because its dashboard was green. Conversely, almost every strength in 6.x.3 is an
+instance of generation or execution, where being wrong is cheap and recoverable.
+
+So the human's scarce attention is best spent not on reviewing code or reading
+results, both of which the agent does competently, but on a narrower question
+asked repeatedly: **what would have to be true for this number to be an artifact,
+and has that been measured this week?** In this study that question, asked in
+various forms by the human perhaps a dozen times, found the dead judge, the
+crippled executor, the reused control, the undeclared protocol deviation and the
+fabricated dependency bug. It has a far better yield per minute than any other
+intervention we tried.
+
+## 6.x.5 What we would require of the next one
 
 Every item below is a counter-measure the project adopted only after paying for
 its absence.
