@@ -1144,6 +1144,43 @@ I briefly concluded disk was about to fill, having run `df` on `/home/ubuntu`
 (838 GB, 595 free). `output/` is a symlink to `/mnt/nvme` — 28 TB, 20 TB free.
 Storage was never at risk. `df` the *resolved* path, not the path you typed.
 
+### The full failure audit (2026-08-18)
+
+Asked "did you put all your failures to the log", the honest answer was no. Eight
+independent reviewer agents then read the entire 79 MB / 18,409-entry session
+transcript, one contiguous slice each, and cross-checked every failure against
+this file, `DIVERGENCES.md`, `docs/repro_report.md` and the August postmortem.
+
+**Result: 185 failures, of which 93 were absent from all four records and 55 were
+recorded without their cause or cost.** About a fifth of what happened had been
+written down. The full ledger, with the taxonomy and the fourteen recurring
+failure modes, is `docs/failure_ledger.md`. Highlights that were missing entirely:
+
+- A **judge called with `max_tokens=8`** on a YES/NO prompt trained 16 verl steps
+  (~5h) against a success rate that was identically 0.000. The user found it.
+- **Reward dilution** in the ported env put ~90% of the signal on a format term;
+  18h of 8×H100 discarded. No reward decomposition was logged at launch.
+- **Frozen task draws**: seeds were a pure function of group id, so every step
+  drew the identical 640 episodes.
+- **"The paper trains ~3500 GRPO steps"** — it says 60, in a file already in this
+  repo — used to justify a "112 days at our pace" analysis.
+- **105 steps trained on an assumed 111-step schedule** in the first two days,
+  from dividing episodes by batch size instead of reading Table 4.
+- **Our own executor defaults (`max_tokens: 256`, no reasoning)** crippled the
+  frozen model for the first 24h run and every early baseline.
+- **`save_steps` is restored from `trainer_state.json` on resume**, so a run the
+  user had been told was crash-protected was not; ~15h lost.
+- **A fabricated dependency bug** the user acted on, whose real cause was our own
+  HTTP 422 plus a 4xx retry loop.
+- Roughly **a week of idle GPU time** across seven incidents, only one recorded.
+
+The pattern with the most consequence for reading any result in this repo:
+**scientific failures got documented, operational ones did not**, and where a
+failure was recorded the record kept the mechanism and dropped the epistemics —
+the false zero is here, the written "no skew" guarantee that shipped with it is
+not. The surviving record reads as a sequence of discoveries; the transcript reads
+as discoveries preceded by confident wrong answers.
+
 ### Where this leaves the reproduction
 
 Running: full-fidelity ALFWorld FFT, `|G|=10`, batch 32, all paper
