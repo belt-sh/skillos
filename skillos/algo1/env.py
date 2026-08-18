@@ -465,9 +465,34 @@ class Algo1CuratorEnv:
             # they contribute nothing rather than noise.
             self.r_task_unmeasured = True
             r_task = 0.0
+            # Say WHY, because there are two very different causes and the
+            # earlier version of this line hardcoded "all cut" for both.
+            #
+            #   attempted == 0  -> the rollout ENDED after the seed position. No
+            #                      executor call was ever cut; the curator simply
+            #                      stopped emitting tool calls (or the framework
+            #                      dropped the tool result). This is a rollout-
+            #                      length problem, not a timeout problem.
+            #   attempted  > 0  -> positions ran and every one was masked. Check
+            #                      the marker breakdown to see which path did it.
+            #
+            # Measured 2026-08-18: of 64 unmeasured rollouts in the dense run,
+            # every single one reported attempted == 0, while only 103 per-episode
+            # timeouts fired in the whole run and zero phase deadlines. Reading
+            # "all cut" cost an hour of chasing the wrong cause.
+            attempted = len(self._executor_results) - 1
+            cuts = {}
+            for r in self._executor_results[1:]:
+                d = r.get("task_description", "")
+                key = ("timeout" if d.startswith("<timeout-position") else
+                       "deadline" if d.startswith("<cut-position") else
+                       "upstream" if d.startswith("<executor-error") else "other")
+                cuts[key] = cuts.get(key, 0) + 1
+            why = ("rollout ended after the seed position, nothing was cut"
+                   if attempted == 0 else
+                   f"{attempted} attempted, all masked: {cuts}")
             print(f"[algo1] rollout has NO measured informed position "
-                  f"({len(self._executor_results) - 1} positions, all cut) — "
-                  f"flagged unmeasured, advantage will be neutralised",
+                  f"({why}) — flagged unmeasured, advantage will be neutralised",
                   file=sys.stderr, flush=True)
         else:
             self.r_task_unmeasured = False
