@@ -70,9 +70,24 @@ method does nothing.
   which is corroboration rather than a fresh fishing expedition.
 - Per-arm SE at n=140, p~0.36 is ~4.1pp. Much of the small wiggling (32-38%) is
   noise; ckpt35 sits ~2.4 SE above baseline.
-- Baseline validated: no_memory came out **47/140 = 33.6%**, matching the
+- ~~Baseline validated: no_memory came out **47/140 = 33.6%**, matching the
   documented canonical value exactly — independent confirmation that merged verl
-  checkpoints evaluate correctly (a path/format bug would not reproduce it).
+  checkpoints evaluate correctly (a path/format bug would not reproduce it).~~
+
+  **RETRACTED 2026-08-18 (found by the ledger audit; it had stood unchallenged
+  for nine days).** This inference is invalid twice over.
+
+  1. **The no-memory arm loads no checkpoint.** It cannot exercise the
+     merge-and-load path it was claimed to validate. Whatever it agreed with,
+     it was not evidence about merged checkpoints.
+  2. **The number it matched was itself wrong.** 33.6% was later shown to be a
+     drift outlier against a same-week mean of 39.8% (RETRACTION 1). So the
+     "validation" was one measurement reproducing another measurement's error.
+
+  This is the most self-flattering sentence in this file: it converted a
+  coincidence into a green light on the exact machinery that most needed
+  checking, and then that machinery went unaudited for another two weeks. Kept
+  visible rather than deleted.
 - Peak 43.6% is still below the paper's 47.9% for 8B, consistent with the
   unresolved atomic-verb gap, not a new effect.
 

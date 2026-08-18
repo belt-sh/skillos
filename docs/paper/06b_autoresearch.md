@@ -59,8 +59,13 @@ The full ledger is released with the artifact. The counts:
 | Recorded, but without cause, cost, or trigger (PARTIAL) | 55 | 30% |
 | **Absent from every record (MISSING)** | **93** | **50%** |
 
-This is a lower bound. The digest truncates long tool outputs, so failures
-visible only inside a large log are under-counted.
+**These integers are approximate and should be read as such.** Verification found
+at least one incident entered twice under different dates, so the total is
+inflated by an unknown small number; the digest also truncates long tool outputs,
+so failures visible only inside a large log are missed entirely. The defensible
+claim is the ratio, not the count: **roughly half of what happened was absent
+from the records, and about a fifth was documented with its cause.** We report the
+raw integers only because withholding them would make the ratio unauditable.
 
 ## 6.x.2 The shortcomings
 
