@@ -438,6 +438,9 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
 
 - **Paper:** batch size **32**, GRPO group size **8** (Table 4, all three domains).
 - **Ours (TRL):** `per_device=2 × grad_accum=2 × 8 processes = 32`. **Matches.**
+  (The dense run re-splits the same 32 as `1 × 4 × 8` to fit the 16k-token logits
+  tensor, with `generation_batch_size: 32` pinned so concurrency is unchanged —
+  see item 17. The effective batch never moved off the paper's 32.)
 - **Ours (verl):** `data.train_batch_size=8` × `env.rollout.n=8` = **64**.
   **Double the paper.**
 - **Why it happened:** `examples/gigpo_trainer/run_skillos.sh:45` justifies the
@@ -496,8 +499,16 @@ number**; the correct prior note is `infsh/reasoning-fix-insufficient-baseline-g
   (`algo1v8`, `algo1fft`) use `beta: 0.001` (paper value); ZeRO-3 shards the ref
   model so it fits. The old `beta: 0.0` was a single-GPU/Path B memory mitigation,
   now obsolete.
-- [ ] `steps_per_generation` defaults — TRL default = `gradient_accumulation_steps`;
-  paper doesn't specify but this is the standard GRPO convention
+- [x] `steps_per_generation` defaults — **RESOLVED 2026-08-18, and it mattered.**
+  TRL defaults it to `gradient_accumulation_steps`, which makes rollout
+  concurrency an accidental function of the accumulation split:
+  `generation_batch_size = per_device × world_size × steps_per_generation`
+  (`grpo_trainer.py:495`), generated in one pass. Leaving it implicit is why we
+  measured "accum halves the rollouts in flight" and wrongly concluded accum
+  *causes* serialisation. The dense run now pins `generation_batch_size: 32`
+  explicitly, so the paper's effective batch of 32 and 32-in-flight generation
+  hold independently of the micro-batch, which is free to be 1 for memory.
+  **Pin it in any future config; do not let it float.**
 
 ---
 
@@ -621,3 +632,43 @@ looks exactly like a finished one. It only surfaced because the reward-health
 line now prints measured positions per rollout, and the number refused to move
 when the supposed cause was removed. **When removing a cause does not move the
 number, the cause was wrong.**
+
+---
+
+## 17. Micro-batch split and checkpoint retention (found 2026-08-17/18, both self-inflicted)
+
+Neither of these is a divergence from the paper — the paper's hyperparameters are
+untouched. They are recorded here because both were *introduced by us* while
+trying to run the paper faithfully, and both would have corrupted the result.
+
+**17a. Rollout concurrency is `generation_batch_size`, not the accumulation split.**
+Two OOMs (~4h of GPU time) came from `per_device_train_batch_size: 4` at
+`max_completion_length: 16384`: the logits tensor is `per_device × seq × vocab`
+= `4 × 16384 × 151936 × 2 B` ≈ **18.5 GiB**, allocated in the forward pass and
+again as the chunk size for the no-grad old-logps pass
+(`grpo_trainer.py:1959`). We had believed `per_device` could not be lowered
+because accumulation serialises the rollouts. It does not: concurrency is
+`generation_batch_size = per_device × world_size × steps_per_generation`
+(`grpo_trainer.py:495`), generated in one pass, which merely *defaults* to
+tracking accum. Pinning it to 32 gives the paper's effective batch of 32, 32
+rollouts in flight, and a 4.6 GiB logits peak simultaneously.
+
+The first fix (offloading Adam states to host RAM) was sized to the first
+traceback's 4.64 GiB rather than computed from the tensor shapes, so it did not
+survive the next attempt. **Compute what holds the memory before answering an
+OOM.**
+
+**17b. `save_total_limit` rotates whole checkpoint directories.**
+A ZeRO-3 checkpoint here is 107 GB (92 GB sharded fp32 Adam state + 16 GB
+consolidated `model.safetensors`). With `save_steps: 1, save_total_limit: 12,
+max_steps: 60`, **only steps 49-60 would exist at the end** — and this run exists
+specifically to measure the *shape* of held-out accuracy across training, which a
+12-step tail cannot show. No error would have been raised. Fixed externally by
+`scripts/archive_eval_weights.sh` (unit `skillos-ckpt-archiver`), preserving the
+16 GB of weights for all 60 steps while Trainer rotates the optimizer state that
+only resume reads.
+
+Both belong to the same family as items 12, 16 and the three sentinel bugs: **the
+failure mode of this project is not crashes, it is silent, plausible-looking
+degradation.** Every guard added since is a print of a quantity that should be
+constant.

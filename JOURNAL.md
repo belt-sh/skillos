@@ -1049,6 +1049,10 @@ actions should need 4h per training step.
   of 32 in one pass. (Both `configs/accelerate_zero3.yaml` and the training config
   carry an accum setting and DeepSpeed asserts they agree — it fails at launch,
   loudly, which is the good kind of failure.)
+
+  **⚠ PARTLY WRONG — see "three failures of mine" below.** Concurrency is set by
+  `generation_batch_size`, which merely *defaults* to tracking accum. Pin it and
+  accum costs nothing. The 5× measurement was real; the attribution was not.
 - **Unparseable executor output was silently coerced to `admissible[0]`.** Now
   re-asked once with a format reminder: coercion **2.1-9.1% → 0.15%**, with 95 of
   96 unparseable outputs recovered. This moved the *absolute* no-memory baseline
@@ -1069,12 +1073,85 @@ It changes success rate by **+0.0pp (p=1.0)**, both arms 59/140. So the paper
 prompt stays the default. Measuring it cost two eval arms and settled a question
 we would otherwise have argued about.
 
+### Getting the full-fidelity run to actually start: three failures of mine (2026-08-17/18)
+
+The run above did not launch cleanly. It took four attempts and cost ~4h of GPU
+time, all of it avoidable. Logging it because two of the three are reasoning
+errors I have now made more than once.
+
+**1. I diagnosed an OOM from its traceback instead of from arithmetic.** The
+first OOM (19:26) asked for 4.64 GiB. I answered it by offloading Adam states to
+host RAM, which frees ~8 GiB/GPU — a plausible-looking 4× margin. The next
+attempt OOM'd at the same place asking for **14.21 GiB**, which offload could
+never have covered.
+
+That number is identifiable on sight: `per_device × seq × vocab` =
+`4 × 16384 × 151936 × 2 B` ≈ **18.5 GiB of logits**, allocated in the forward
+pass and again as the chunk size for the no-grad old-logps pass
+(`grpo_trainer.py:1959`). One multiplication, available before the first launch,
+would have found it. Instead I sized a fix to a symptom and paid two hours to
+learn the fix was aimed at the wrong tensor. This is the same pattern as
+RETRACTION 2 above: **when removing a supposed cause does not move the number,
+the cause was wrong** — except here I did not even wait to check, I just shipped
+the next guess.
+
+**2. I asserted that gradient accumulation caps rollout concurrency. It does
+not.** The bullet in the section above ("Gradient accumulation serialises the
+batch") is **half wrong, and this entry corrects it**. Generation concurrency is
+`generation_batch_size`, derived as
+`per_device × world_size × steps_per_generation` (`grpo_trainer.py:495`) and
+generated in **one pass**. It merely *defaults* to tracking
+`gradient_accumulation_steps`, so the two moved together in every measurement I
+made and looked causally linked. They are independent knobs, and
+`scripts/train_algo1.py` was already forwarding `generation_batch_size` from the
+YAML the whole time.
+
+Setting it explicitly resolves the OOM at no cost to anything:
+
+| | before | after |
+|---|---|---|
+| effective batch | 32 | **32** (paper) |
+| rollouts in flight | 32 (4/rank) | **32 (4/rank)** |
+| training micro-batch | 4 | **1** |
+| logits peak | ~18.5 GiB | **~4.6 GiB** |
+
+Accumulation really is nearly free here (the gradient step is 1.4% of wall) —
+but only *once generation is decoupled*. Both statements needed to be in the
+same sentence and only one of them was.
+
+**3. `save_total_limit` would have silently destroyed the run's entire result.**
+Checkpoint-1 landed at **107 GB**, not the ~16 GB I had claimed in the config
+comment: 92 GB of sharded fp32 Adam state plus the 16 GB consolidated
+`model.safetensors`. HF Trainer rotates **whole checkpoint directories**, so
+`save_steps: 1` + `save_total_limit: 12` + `max_steps: 60` leaves **only steps
+49-60** in existence at the end.
+
+The question this run exists to answer is the *shape* of held-out accuracy across
+training — monotone as the paper reports, or the bimodal oscillation we keep
+measuring. A 12-step tail cannot show a shape. The run would have reported
+success at step 60, thrown no error, and the early checkpoints would simply have
+been gone. Same class as the three sentinel bugs above: **the failure does not
+announce itself.** I found it only because I looked at the checkpoint's size.
+
+Fixed by `scripts/archive_eval_weights.sh` (unit `skillos-ckpt-archiver`), which
+copies the 16 GB of weights for every step and lets Trainer rotate the 92 GB
+nobody reads. External daemon rather than a config change, for two reasons:
+`save_total_limit: 60` would hoard 6.4 TB of optimizer state that will never be
+read, and any config edit costs a restart, which costs the ~1.9h step in flight.
+
+**And one false alarm worth recording, because it nearly caused a bad decision.**
+I briefly concluded disk was about to fill, having run `df` on `/home/ubuntu`
+(838 GB, 595 free). `output/` is a symlink to `/mnt/nvme` — 28 TB, 20 TB free.
+Storage was never at risk. `df` the *resolved* path, not the path you typed.
+
 ### Where this leaves the reproduction
 
 Running: full-fidelity ALFWorld FFT, `|G|=10`, batch 32, all paper
-hyperparameters, median 9 of 9 positions measured, **1.95h/step measured → ~4.9
-days** for 60 steps. `systemd --user` unit `skillos-dense5`, supervised by
-`scripts/dense_supervisor.sh`, resuming from checkpoints every 5 steps.
+hyperparameters, median 9 of 9 positions measured, coercion 0.0-0.4%.
+**1.84h/step measured over the first 6 steps → ~4.6 days** for 60 (TRL's own ETA
+agrees: 101h remaining at step 6). `systemd --user` unit `skillos-dense7`,
+supervised by `scripts/dense_supervisor.sh`, checkpointing every step with weights
+archived for all 60.
 
 Every result in `docs/repro_report.md` predates at least one of the four fixes
 above and needs re-measuring against the 42.1% contemporaneous baseline. The
