@@ -87,9 +87,31 @@ ALFWorld do not help an ALFWorld executor; a curator trained on mathematics
 does. This is also the arm family that, measured during an API outage, produced
 a large *negative* cross-domain effect that we retracted (Appendix B.1).
 
-**Neighbouring checkpoints on the held-out split: [PENDING]** (ckpt45, 55, 60).
-If they are also positive the effect is real; if only ckpt50 is, it is checkpoint
-selection and we will say so.
+**Neighbouring checkpoints on the held-out split.** We committed to reporting
+these either way, so: they are mixed, and they cost the simple version of this
+result.
+
+| checkpoint | held-out delta | p | Holm (7-arm family) |
+|---|---|---|---|
+| ckpt45 | +1.5pp | 0.87 | 1.00 |
+| ckpt50 (selected on `valid_seen`) | +9.0pp | 0.073 | 0.36 |
+| ckpt55 | +0.0pp | 1.00 | 1.00 |
+| ckpt60 | **+11.2pp** | **0.0026** | **0.0156** |
+
+The strongest arm in the family is one we did not select, ckpt60, and it is the
+only reasoning-curator arm that survives Holm correction. Its two immediate
+neighbours are indistinguishable from the control. So the effect is neither a
+pure selection artifact, since an unselected checkpoint carries the largest and
+only correction-surviving effect, nor a stable property of the trained curator,
+since adjacent checkpoints show nothing.
+
+The honest reading is that **checkpoint-to-checkpoint variance is comparable to
+the effect**, which is the same non-monotone instability documented in Section 5.2
+for the ALFWorld-trained runs, here with one checkpoint landing above the
+correction threshold. Deciding between "a real effect at an unstable location" and
+"a wide lottery with one lucky ticket" needs the two additional training seeds
+below, which we do not have. We therefore report ckpt60 as the project's one
+correction-surviving curator result and decline to claim it reproduces.
 
 **Two additional reasoning-curator training seeds: [PENDING].** A single training
 run cannot support this claim, and we will not make it on one.
@@ -135,21 +157,55 @@ not the whole of it, since the no-memory rate is only 2.1%.
 
 ## 5.6 Content controls: is it the skills, or just more text?
 
-**[PENDING]** Two controls on the held-out split, both running at the time of
-writing:
+Two controls on the held-out split, against a contemporaneous no-memory control
+at 35.1% on the same 134 games. Both were run before their outcome was known and
+are reported as promised.
 
 - **Shuffled retrieval.** The trained curator's own repository, with retrieval
   returning a random five skills instead of the BM25 top five. Same curator, same
-  repository, same prompt length, relevance destroyed. If +9.0pp survives, the
-  executor is helped by extra markdown rather than by relevant skills.
-- **Author-written oracle skills.** Eight skills written from the published
-  ALFWorld action grammar and task-type definitions, with no curator and no
-  access to eval data. Written by the LLM agent conducting the study, not by a
-  human: an easier condition than the curator's, since the curator must infer
-  the same content from rollouts. Bounds what a curator could be worth here.
+  repository, same prompt length, relevance destroyed.
+- **Oracle skills.** Eight skills written from the published ALFWorld action
+  grammar and task-type definitions, with no curator and no access to eval data.
+  Written by the LLM agent conducting the study, not by a human, so this is *not*
+  a human baseline: it is an easier condition than the curator's, since the
+  curator must infer the same content from rollouts. It bounds what a curator
+  could be worth here.
 
-We consider the shuffled control decisive for how much the Section 5.3 result is
-worth, and we commit to reporting it either way.
+| arm | success | delta | p (exact McNemar) | Holm | 95% CI | MDE80 |
+|---|---|---|---|---|---|---|
+| no memory (control) | 35.1% | | | | | |
+| oracle skills, no curator | 53.0% | +17.9pp | 0.0001 | **0.0005** | [+9.7, +26.1] | 12.5pp |
+| reasoning curator ckpt60 | 46.3% | +11.2pp | 0.0026 | **0.0156** | [+4.5, +17.9] | 10.0pp |
+| reasoning curator ckpt50 | 44.0% | +9.0pp | 0.073 | 0.36 | [+0.0, +17.9] | 12.9pp |
+| Gemini 2.5 Pro curator | 41.0% | +6.0pp | 0.28 | 1.00 | [-3.0, +14.9] | 13.5pp |
+| ckpt50, retrieval shuffled | 37.3% | +2.2pp | 0.70 | 1.00 | [-5.2, +9.7] | 10.9pp |
+| reasoning curator ckpt55 | 35.1% | +0.0pp | 1.00 | 1.00 | [-8.2, +7.5] | 11.5pp |
+
+Holm is applied across the seven-arm family. Two arms survive, and both exceed
+their own MDE.
+
+**The shuffled control answers the question it was built for.** Destroying
+relevance while holding the curator, the repository and the prompt length fixed
+collapses +9.0pp to +2.2pp. Where a lift exists it is carried by relevant
+content, not by the presence of additional markdown.
+
+**The oracle arm relocates the bottleneck.** Eight skills derived from public
+documentation gain 30 games and lose 6, for +17.9pp, the largest and cleanest
+effect anywhere in this reproduction. This executor can therefore exploit good
+notes. What the training procedure fails to do is produce notes as good as a
+careful reading of the action grammar. That is a considerably more specific
+negative result than "memory does not help this model", and it suggests the
+productive target for future work is curator supervision rather than executor
+scale.
+
+Two caveats we cannot resolve. The oracle arm carries a **warm-start advantage**:
+its eight skills are present from game 1, while every curator arm begins with an
+empty repository and must write its way up. Part of +17.9pp is that head start
+rather than content quality, and the clean way to separate them is to replay a
+curator's final repository from game 1, which we have not run. Second, the
+neighbouring checkpoints of the surviving curator arm are +1.5pp (ckpt45) and
++0.0pp (ckpt55) against ckpt60's +11.2pp, so **checkpoint selection carries real
+risk of a lottery** even where an arm survives correction.
 
 ## 5.7 Six candidate causes, each with a training run or full sweep behind it
 

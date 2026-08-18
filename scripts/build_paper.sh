@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../docs/paper"
 mkdir -p build
 
 SECTIONS=(01_abstract 02_introduction 03_background_related 04_methodology
-          05_results 05b_power 06_threats 07_discussion
+          05_results 05b_power 06_threats 06b_autoresearch 07_discussion
           08_appendix_conduct 09_appendix_incidents 10_appendix_tables)
 
 for s in "${SECTIONS[@]}"; do
