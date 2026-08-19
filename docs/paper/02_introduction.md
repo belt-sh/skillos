@@ -15,10 +15,11 @@ We set out to reproduce this. The motivation was practical rather than critical:
 if a small trained curator can lift a frozen agent by 13pp, that is a cheap and
 deployable technique, and we wanted it working before building on it.
 
-This paper reports what happened over roughly two months of 8xH100 time and
-seven complete 60-step training runs. The short version is that we could not
-obtain the effect, and that the most useful thing we learned was about
-measurement rather than about skill repositories.
+This paper reports what happened over roughly three months of 8xH100 time and
+seven complete 60-step training runs. The short version is that the method works,
+the cross-executor transfer claim reproduces at parity, but the same-agent
+ALFWorld lift does not survive contemporaneous controls or multiplicity
+correction, and the most useful thing we learned was about measurement.
 
 ## 1.1 What we did
 
@@ -38,45 +39,43 @@ model, Gemini 2.5 Pro, for the trained curator.
 
 ## 1.2 What we found
 
-For most of those two months we believed we were reproducing the paper. Every
-sweep contained a checkpoint with a significant-looking lift, in the +9 to +14pp
-band that brackets the reported +13.3pp. Three seeds and two frameworks agreed.
+The method works and the machinery is healthy. Within GRPO groups, task success
+supplies 79% of the reward variance that reaches the gradient, the training
+converges without pathology, and the curators produce coherent skill
+repositories.
 
-They agreed because they were all being compared against the same control
-number, measured once, ten weeks before the arms that were being compared to it.
+Two of the paper's claims reproduce. **Cross-executor transfer** reproduces at
+parity: an 8B-trained curator lifts a 32B executor to 62.1% (the paper reports
+61.2%). **Cross-domain transfer** yields a correction-surviving positive on a
+held-out split: a mathematics-trained curator gives +11.2pp (p=0.003, survives
+Holm), though adjacent checkpoints show nothing.
 
-When we re-measured that control in the same week as the arms, it moved from
-33.6% to 39.8% (four replicates, spread 2.1pp). The old figure sits outside the
-replicate spread, so it is not sampling noise. Re-paired against a
-contemporaneous baseline, the lifts disappear: our best seed goes from +13.6pp
-at p=0.0026 to +3.6pp at p=0.47, and eight of its twelve checkpoints are
-negative.
+What does not reproduce is a stable same-agent ALFWorld lift. For most of those
+three months we believed we had one: every sweep contained a significant-looking
+peak in the +9 to +14pp band. Three seeds and two frameworks agreed. They
+agreed because they were all subtracting the same control number, measured once,
+ten weeks before the arms it was being compared to.
 
-Our principal findings are therefore:
+Re-measured in the same week, the control moved from 33.6% to 39.8% (four
+replicates, spread 2.1pp). Re-paired, our best seed goes from +13.6pp at
+p=0.0026 to +3.6pp at p=0.47. We have not shown the curator does nothing; we
+have shown that any same-agent ALFWorld effect is smaller than this protocol can
+resolve.
 
-1. **The curator lift does not reproduce under a same-epoch control.** We make
-   no claim that the original result is wrong. We report that a faithful
-   implementation, run seven times, did not yield it once the control was
-   measured correctly.
+Additional findings:
 
-2. **Reusing a control measured against a hosted model API is a significance
-   factory.** The drift we measured (5.7pp) is larger than most effects being
-   claimed in this literature. This is a methodological result independent of
-   SkillOS.
+1. **Reusing a control measured against a hosted API is a significance factory.**
+   The drift (5.7pp) exceeds most effects claimed in this literature.
 
-3. **A frontier curator does no better.** Gemini 2.5 Pro, at 84 times the cost
-   per call, scores 1.4pp below writing no notes at all (p=0.86). The
-   directional part of the paper's claim, that a small trained curator is
-   competitive with a much larger one at this task, survives. The part that
-   would make it exciting does not, because neither of them beats the baseline.
+2. **Gemini 2.5 Pro, at 84x the cost, does no better than writing no notes at
+   all** (p=0.86). The paper's directional claim that a small trained curator
+   competes with a frontier model survives.
 
-4. **Adding skills makes a small executor produce more unparseable actions**,
-   from 2.1% with no memory to 7.0-9.1% with curation. This is a concrete mechanism
-   for why memory can fail to help, or actively hurt, a small model.
+3. **Retrieved skills increase unparseable-action rate** from 2.1% to 7-9%, a
+   concrete mechanism for memory hurting a small model.
 
-5. **Six candidate explanations for the null are falsified**, each with a full
-   training run or a full sweep behind it, including both halves of the paper's
-   own grouping ablation.
+4. **Six candidate causes of the null are falsified**, each with a full training
+   run, including both halves of the paper's own grouping ablation.
 
 ## 1.3 What this paper is not
 

@@ -13,7 +13,7 @@
 | Retraction decisions | made | proposed |
 | This paper | directed, edited | drafted |
 
-The agent ran continuously over roughly two months, resuming across sessions
+The agent ran continuously over roughly three months, resuming across sessions
 from a persistent memory of decisions, results, and prior corrections. It
 supervised long-running jobs, detected and recovered from infrastructure
 failures, and launched pre-agreed follow-up experiments without waiting for a
@@ -87,7 +87,7 @@ wrong in the same direction, confidently and with correct arithmetic.
 
 ## A.5 Costs
 
-Roughly two months of wall clock on 8xH100 for training, plus hosted inference
+Roughly three months of wall clock on 8xH100 for training, plus hosted inference
 for executor and judge across approximately one hundred evaluation arms of 140
 games. Seven complete 60 step training runs. The verl run alone took 10.2 days
 at roughly 15,986 executor calls per training step.

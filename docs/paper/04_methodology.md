@@ -96,7 +96,7 @@ them.
 ## 4.5 Conduct of the study: an LLM agent as the running experimentalist
 
 This study was executed by a large language model agent (Claude, Anthropic)
-operating under human direction over approximately two months, with the human
+operating under human direction over approximately three months, with the human
 author setting objectives, approving experiments, and adjudicating disputes. The
 agent wrote the implementation, launched and supervised training runs, built the
 evaluation harness, ran the analyses, and drafted this paper.

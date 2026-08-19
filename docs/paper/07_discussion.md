@@ -5,15 +5,19 @@
 The method is implementable and the machinery works. A curator trained with GRPO
 against a composite reward produces coherent skill repositories, the reward
 gradient is dominated by downstream task success as intended, and the training
-runs converge without pathology. Nothing we found suggests the idea is
-incoherent.
+runs converge without pathology.
 
-What we could not find is an effect large enough to see. Over seven training runs
-and roughly one hundred evaluation arms, no ALFWorld-trained curator produced a
-significant improvement on the executor it trained against, once measured against
-a control from the same week. The one positive signal came from somewhere we did
-not expect, a curator trained on mathematics, and it is below our own detection
-threshold.
+Two results reproduce. Cross-executor transfer, the paper's strongest practical
+claim, holds at parity: an 8B-trained curator lifts a 32B executor to 62.1%
+against the paper's 61.2%. A mathematics-trained curator produces the project's
+only correction-surviving lift on a held-out ALFWorld split (+11.2pp, p=0.003),
+though adjacent checkpoints are null.
+
+What we could not find is a stable same-agent ALFWorld effect. Over seven
+training runs and roughly one hundred evaluation arms, no ALFWorld-trained
+curator produced a significant improvement on the executor it trained against,
+once measured against a control from the same week. The effect is not absent; it
+is smaller than this protocol can resolve.
 
 Three readings are consistent with our data, and we cannot distinguish them.
 
@@ -34,13 +38,14 @@ into good actions. The 32B transfer family, once re-paired, speaks to this.
 unexplained baseline gap is evidence for it. We have released everything needed
 to find such a difference.
 
-## 7.2 Cross-domain transfer, if it survives
+## 7.2 Cross-domain transfer
 
-Our only positive result is the strange one: a curator trained on mathematics
-helped an embodied agent, while curators trained on the embodied task did not.
+The most interesting positive result is the unexpected one: a curator trained on
+mathematics helped an embodied agent, while curators trained on the embodied
+task did not. Ckpt60 survives Holm correction on the held-out split, but its
+adjacent checkpoints are null, so the effect is real at one unstable location.
 
-If it survives the shuffled-retrieval control and two more training seeds, one
-explanation fits our other measurements. A curator trained on ALFWorld learns to
+One explanation fits our other measurements. A curator trained on ALFWorld learns to
 write ALFWorld-specific procedures, which are long, and which compete with the
 action format for the executor's attention (Section 5.5). A curator trained on
 mathematics has no domain-specific procedures to write, so it writes shorter,
@@ -86,7 +91,7 @@ We disclose in Section 4.5 and Appendix A that this work was executed by an LLM
 agent under human direction. Two observations seem worth generalising.
 
 **The agent was strong at execution and weak at doubt.** It implemented, launched,
-supervised, recovered, and analysed competently across two months and seven
+supervised, recovered, and analysed competently across three months and seven
 training runs. It did not catch either of the errors that mattered. In both cases
 its analysis was internally consistent, arithmetically correct, and wrong in the
 same direction as its pipeline. It produced confident, well-argued write-ups of
