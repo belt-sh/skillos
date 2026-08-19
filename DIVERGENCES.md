@@ -679,7 +679,32 @@ constant.
 
 **This is the most consequential divergence in the project, and it is ours, not
 the paper's.** It was introduced in the first Algorithm 1 commit (`eacad05`) and
-fixed in `20db029`, so **every Algorithm 1 run in this reproduction is affected.**
+fixed in `20db029`, so **every TRL Algorithm 1 run in this reproduction is
+affected.**
+
+**Scope correction (2026-08-19).** An earlier version of this item said *every*
+Algorithm 1 run was affected. That was wrong, and it overstated the reach of our
+own bug. The **verl/GiGPO run is not affected**, because verl-agent drives the
+position loop from the environment exactly as the paper's Algorithm 1 does:
+
+```python
+# verl-skillos/agent_system/environments/env_package/skillos/envs.py:477
+self.position += 1
+done = self.position >= self.group_size
+...
+scorable = [r for r in eval_results if not r.get("api_error")]
+r_task = float(np.mean([r["success"] for r in scorable]))
+```
+
+The curator emits tool calls but cannot decline to advance, so early exit is not
+expressible, and the denominator is the protocol's own position count less
+infrastructure losses. The verl run is also not exposed to item 16, because
+verl-agent generates each position separately rather than accumulating one
+completion. **The verl run is therefore a witness to the project's central
+negative result that is free of both defects**, which matters more than the
+scope correction itself: the null is not an artifact of either bug. See §5.9,
+where the reward decomposition that exonerates the training signal is computed
+from that run's 850 rollouts.
 
 - **Paper, reward (§ reward definition):**
   `r_task = (1 / (|G|−1)) · Σ_{i=2}^{|G|} 1(ξ_i)`.
@@ -733,10 +758,27 @@ the curator declined to play scores 0 and stays in the denominator. Pinned by
 median denominator and the count of rollouts that ended early having played
 nothing.
 
-**Residual known bias.** If the framework silently truncates a rollout, its
-unplayed positions now count as curator failures rather than infrastructure
-losses. Measured `clipped_ratio` is 0-9% against 19% policy-driven early exits,
-so we accept this direction, but it is a real and undismissed bias.
+**Fix, final form (`20db029` onward).** The paragraph above describes the first
+attempt, which scored an unplayed position 0. That is harsher than the paper,
+which never leaves a position unplayed at all. The shipped fix instead **runs the
+remaining positions** before the reward is computed: if a rollout stops emitting
+tool calls at position 4, positions 5-9 are executed with the curated repo `S`
+frozen as the curator left it, concurrently, under a wall-clock budget
+(`SKILLOS_COMPLETION_BUDGET_S`). Only positions abandoned to that budget are
+marked `cut` and leave the denominator. So the curator's choice to stop no longer
+changes what is measured, in either direction.
+
+**Residual known bias.** Positions completed after the curator stopped are played
+against a repo that would have kept growing had it continued, so they are
+measured against a slightly staler `S` than the paper's loop would have used.
+This biases *against* early-stopping rollouts rather than for them. Measured
+overhead is ~12 of ~288 positions per step (~4%).
+
+**Measured after the fix** (`alfworld-dense-fft-paperloop`, first 4 steps): median
+denominator 9 of 9, zero rollouts neutralised as unmeasured, and the early-stop
+rate flat at **10.9%** (14 of 128 rollouts; 7 in the first half of the window, 7
+in the second) against **12.8% → 23.8% climbing** under the hackable reward. The
+behaviour still occurs; it is no longer rewarded.
 
 **Still open:** whether to restore the paper's environment-driven loop. The
 tool-driven design is what makes early exit expressible at all, and the reward
