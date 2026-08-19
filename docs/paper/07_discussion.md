@@ -68,7 +68,7 @@ shared reference.** Every one of those runs was independently trained and
 independently evaluated, and they all agreed, because they were all subtracting
 the same wrong number.
 
-Combined with Section 5.x, where the standard 140-game protocol turns out to have
+Combined with Section 5.10, where the standard 140-game protocol turns out to have
 80% power to detect exactly the effect size the field reports and no less, the
 practical recommendations are unglamorous and cheap:
 

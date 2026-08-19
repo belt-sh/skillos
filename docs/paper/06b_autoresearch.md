@@ -1,4 +1,4 @@
-# 6.x Conduct of an agent-run reproduction
+# 6.8 Conduct of an agent-run reproduction
 
 This study was carried out almost entirely by an LLM agent working continuously
 for roughly three months, with a human author setting scope, funding compute, and
@@ -17,7 +17,7 @@ useful. A count, a taxonomy, and a cost are. Where a behaviour had a scientific
 consequence we cite the relevant result in Section 5 as evidence, rather than
 claiming the result as a contribution of the method of work.
 
-## 6.x.1 How the failures were counted
+## 6.8.1 How the failures were counted
 
 The study ran as one continuous session: a 79 MB transcript, 18,409
 conversational turns. At the end we compressed it to prose and had eight
@@ -48,7 +48,7 @@ rather than for trusting reviewer consensus.
 Therefore a second pass re-verified every row against the raw transcript, the
 installed libraries and git history, with instructions to default to UNSUPPORTED.
 That pass is the reason the numbers below are stated as they are, and it changed
-several: see §6.x.6.
+several: see §6.8.6.
 
 The full ledger is released with the artifact. The counts:
 
@@ -67,7 +67,7 @@ claim is the ratio, not the count: **roughly half of what happened was absent
 from the records, and about a fifth was documented with its cause.** We report the
 raw integers only because withholding them would make the ratio unauditable.
 
-## 6.x.2 The shortcomings
+## 6.8.2 The shortcomings
 
 Fourteen recurring modes emerged. We report the six with the largest
 consequences for the science, since the operational ones (self-inflicted process
@@ -164,7 +164,7 @@ volunteered on request. It is what happens when the record is written by the sam
 process that made the mistakes, and when writing it is the last task rather than a
 gate.
 
-## 6.x.3 What the mode of work did well
+## 6.8.3 What the mode of work did well
 
 This subsection is about behaviour, not about findings. The scientific results of
 this study are in Section 5 and stand on their own evidence. What we report here
@@ -173,7 +173,7 @@ been unusually productive, citing results only as evidence that a disposition ha
 consequences.
 
 We stress the uncomfortable part: these are largely the same dispositions that
-produced Section 6.x.2. They are not a separate, better mode that could be
+produced Section 6.8.2. They are not a separate, better mode that could be
 selected instead.
 
 **It falsified its own explanations at a cost no human would pay.** Six candidate
@@ -186,7 +186,7 @@ hypothesis was zero and the next falsification was always cheap to propose.
 
 **When challenged, it computed rather than argued.** Asked to defend a null, its
 response was to derive the evaluation's minimum detectable effect instead of
-marshalling reasons the null was believable (Section 5.x). This is a disposition
+marshalling reasons the null was believable (Section 5.10). This is a disposition
 rather than a skill: the arithmetic was elementary and available to anyone in this
 line of work. What was unusual was reaching for the instrument's resolution as the
 first move in a disagreement.
@@ -204,7 +204,7 @@ anything.
 **It wrote disposable instrumentation freely.** Parse-rate telemetry, a
 reward-variance decomposition, per-rollout health lines printing measured
 positions and distinct tasks drawn, and a transcript digest that compressed 79 MB
-to 4.6 MB for the audit in 6.x.1. Each took minutes and none would survive a
+to 4.6 MB for the audit in 6.8.1. Each took minutes and none would survive a
 human's implicit cost-benefit filter for throwaway diagnostics. The
 highest-value artifact produced in three months is a print statement that reports
 how many positions of each rollout were actually measured.
@@ -226,12 +226,12 @@ produce as a side effect of debugging.
 **It supervised long-running work for three months.** Crash detection,
 resume-from-checkpoint, relaunch under a supervisor, and launching pre-agreed
 follow-up experiments without waiting to be told. The idle-GPU incidents in
-6.x.2 are the failure side of this ledger; the other side is that eight GPUs
+6.8.2 are the failure side of this ledger; the other side is that eight GPUs
 stayed fed across dozens of crashes, two OOM classes, an NCCL watchdog family, a
 DNS outage and a disk exhaustion, mostly without a human in the loop.
 
 **It audited itself when asked, at a depth that was not required, and published
-the result.** The 185-entry ledger in 6.x.1, including the finding that half of
+the result.** The 185-entry ledger in 6.8.1, including the finding that half of
 its own failures were undocumented, was produced in response to a five-word
 question. It also designed the overlapping-slice control that made the audit
 checkable, and corrected one reviewer's claim that was wrong in its own favour.
@@ -243,12 +243,12 @@ and abandon it an hour later. Fluent prose produced both a readable record and
 guesses that were typographically indistinguishable from measurements. A
 supervisor loop that recovers from crashes unattended is the same machinery that
 restarted a run and discarded two hours of work. **We do not think the failure
-modes in 6.x.2 can be removed by instruction while keeping the behaviours in
-6.x.3, because they are the same behaviours pointed at different problems.** What
+modes in 6.8.2 can be removed by instruction while keeping the behaviours in
+6.8.3, because they are the same behaviours pointed at different problems.** What
 can be changed is the gating: which of them is allowed to reach a result
 unchecked.
 
-## 6.x.4 A division of labour that reflects this
+## 6.8.4 A division of labour that reflects this
 
 The pattern across three months is consistent enough to state as a recommendation.
 The agent was strongest at generating and killing candidate explanations,
@@ -257,10 +257,10 @@ tedious verification when explicitly directed at it. It was weakest at deciding
 that a measurement was trustworthy, which is the one judgement the entire study
 depended on.
 
-Every significant error in 6.x.2 is an instance of that weakness: a control
+Every significant error in 6.8.2 is an instance of that weakness: a control
 believed because it was written down, a dependency believed because a comment
 described it, a fix believed because it addressed the traceback, a run believed
-because its dashboard was green. Conversely, almost every strength in 6.x.3 is an
+because its dashboard was green. Conversely, almost every strength in 6.8.3 is an
 instance of generation or execution, where being wrong is cheap and recoverable.
 
 So the human's scarce attention is best spent not on reviewing code or reading
@@ -272,7 +272,7 @@ crippled executor, the reused control, the undeclared protocol deviation and the
 fabricated dependency bug. It has a far better yield per minute than any other
 intervention we tried.
 
-## 6.x.5 What we would require of the next one
+## 6.8.5 What we would require of the next one
 
 ### The instruction is part of the result
 
@@ -286,7 +286,7 @@ a number gets checked. "Do not stop" does not make an agent careless in the
 moment; every individual decision in this project was locally reasonable, and the
 agent's own reasoning was rarely the weak link. What continuous operation removes
 is the interval in which a result sits unused long enough for somebody to ask
-where it came from. Of the failures in §6.x.2, the expensive ones are not errors
+where it came from. Of the failures in §6.8.2, the expensive ones are not errors
 of reasoning at all. They are results that were *used* before they were
 questioned: a baseline reused for ten weeks, a length limit trusted for eleven,
 a judge whose score was zero for five hours while the run was described as
@@ -342,8 +342,8 @@ taken on faith.
 7. **Write the failure record as a gate, not as a final task**, and have it
    audited by something other than the process that made the mistakes. *Price:
    roughly half of what happened here was missing from a record kept diligently,
-   unprompted, and in good faith throughout* (§6.x.1), *and the audit of that
-   record was itself wrong in a different way* (§6.x.6).
+   unprompted, and in good faith throughout* (§6.8.1), *and the audit of that
+   record was itself wrong in a different way* (§6.8.6).
 
 ### What this costs and what it saves
 
@@ -363,7 +363,7 @@ have been training against something wrong; plus a box sitting idle because the
 thing that had stopped was the supervisor, not the job. Both categories are
 invisible to the metric everyone watches, which is whether the run is up.
 
-## 6.x.6 What the verification pass changed
+## 6.8.6 What the verification pass changed
 
 Reported because a ledger of failures assembled by the same kind of process that
 produced the failures should not be trusted on its own authority. Eight verifier
@@ -434,7 +434,7 @@ under-measured durations, in whichever direction the nearest plausible figure
 happened to lie.** Where no figure existed, one was supplied.
 
 We are keeping this paragraph in its corrected form rather than silently fixing
-it, because the withdrawn version is itself an instance of what §6.x.2 describes:
+it, because the withdrawn version is itself an instance of what §6.8.2 describes:
 a clean causal story fitted to real numbers, written confidently, and falsified by
 the next measurement. It survived one round of verification and died in the
 second.

@@ -63,7 +63,7 @@ is a flat, noisy sweep with no trend.
 The 95% bootstrap intervals on these arms span roughly ±8pp (Appendix C), and the
 per-arm MDE at 80% power is 9 to 12pp. **We have not shown that the curator does
 nothing.** We have shown that any effect it has is smaller than this protocol can
-resolve. Section 5.x develops this.
+resolve. Section 5.10 develops this.
 
 ## 5.3 Cross-domain transfer is the only positive result
 

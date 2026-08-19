@@ -22,7 +22,7 @@ Two properties of this literature matter for our purposes. First, the memory is
 usually produced by prompting rather than trained, so its quality is bounded by
 the model writing it. Second, evaluation is usually a single number on a small
 fixed benchmark, with no confidence interval and no correction for the number of
-configurations tried. Section 5.x argues that the second property is a serious
+configurations tried. Section 5.10 argues that the second property is a serious
 problem at the effect sizes involved.
 
 ## 2.2 Training the memory writer
@@ -69,7 +69,7 @@ reporting. Bouthillier et al. \cite{bouthillier2021variance} quantified how much
 benchmark variance comes from sources other than the treatment.
 
 In NLP specifically, Card et al. \cite{card2020power} performed the analysis that
-most directly anticipates our Section 5.x: they computed statistical power for
+most directly anticipates our Section 5.10: they computed statistical power for
 common benchmarks and found that most attempted comparisons to state of the art
 are underpowered, with typical test sets unable to resolve the differences being
 claimed. Dror et al. \cite{dror2018hitchhiker} catalogue the significance-testing
