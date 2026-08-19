@@ -751,15 +751,12 @@ tracking how long each rollout happened to be. It sits alongside, not instead of
 the contemporaneous-baseline retraction (item 16, JOURNAL RETRACTION 1/2): the
 baseline error corrupted the *evaluation*, this corrupted the *training signal*.
 
-**Fix.** Denominator is `|G|−1` minus only those positions lost to
-infrastructure (per-episode timeout, upstream error, phase deadline). A position
-the curator declined to play scores 0 and stays in the denominator. Pinned by
-`tests/test_rtask_denominator.py` (6 cases). The health line now prints the
-median denominator and the count of rollouts that ended early having played
-nothing.
+**Fix, first attempt (superseded).** Denominator changed to `|G|−1` minus only
+positions lost to infrastructure. A position the curator declined to play scored
+0 and stayed in the denominator. This was harsher than the paper, which never
+leaves a position unplayed at all.
 
-**Fix, final form (`20db029` onward).** The paragraph above describes the first
-attempt, which scored an unplayed position 0. That is harsher than the paper,
+**Fix, final form (`20db029` onward).** That is harsher than the paper,
 which never leaves a position unplayed at all. The shipped fix instead **runs the
 remaining positions** before the reward is computed: if a rollout stops emitting
 tool calls at position 4, positions 5-9 are executed with the curated repo `S`
@@ -774,11 +771,26 @@ measured against a slightly staler `S` than the paper's loop would have used.
 This biases *against* early-stopping rollouts rather than for them. Measured
 overhead is ~12 of ~288 positions per step (~4%).
 
-**Measured after the fix** (`alfworld-dense-fft-paperloop`, first 4 steps): median
-denominator 9 of 9, zero rollouts neutralised as unmeasured, and the early-stop
-rate flat at **10.9%** (14 of 128 rollouts; 7 in the first half of the window, 7
-in the second) against **12.8% → 23.8% climbing** under the hackable reward. The
-behaviour still occurs; it is no longer rewarded.
+**Measured after the fix** (`alfworld-dense-fft-paperloop`, 5 steps):
+
+- Median denominator 9 of 9, zero rollouts neutralised as unmeasured.
+- Early-stop rate by step: **9.4%, 3.1%, 6.3%, 9.4%, 50%** (30/160 overall =
+  18.8%). Steps 1-4 are stable at ~7%; step 5 spiked to 50%.
+- Step 5 spike coincides with `call_frequency` dropping from ~10.5 to 7.8 and
+  `grad_norm` rising from 0.67 to 1.58, i.e. the model chose to emit fewer tool
+  calls after a large gradient update at step 4. Reward *fell* from 1.023 to
+  0.843 — the fix is working (early exit is not rewarded) but the capability
+  remains. Step 6 partial (5/8 batches) shows **zero** early exits and min
+  positions 7-9, consistent with recovery. Zero DEADLINE CUT lines, so the phase
+  budget was never the cause.
+- The hackable-reward run climbed 12.8% → 23.8% monotonically; this run spiked
+  once and (pending step 6 close) fell back. The distinction is between a
+  transient policy oscillation and a trained incentive.
+
+**An earlier version of this paragraph said 10.9%, flat.** That was computed from
+4 steps (14/128) and committed before step 5 closed. The "flat" characterisation
+was wrong: the data available at the time happened to be stable, but the next
+step falsified it within hours.
 
 **Still open:** whether to restore the paper's environment-driven loop. The
 tool-driven design is what makes early exit expressible at all, and the reward
