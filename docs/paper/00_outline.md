@@ -1,11 +1,13 @@
 # Paper outline and claim ledger
 
-Working title:
+Title:
 
-> **A Reproduction of SkillOS Under Contemporaneous Controls: The Curator Lift
-> Does Not Survive a Same-Epoch Baseline**
+> **An Independent Reproduction of SkillOS with Contemporaneous Controls**
 
-Alternative, less combative:
+Earlier drafts (retired):
+
+> ~~A Reproduction of SkillOS Under Contemporaneous Controls: The Curator Lift
+> Does Not Survive a Same-Epoch Baseline~~
 
 > **Independent Reproduction of SkillOS: Seven Training Runs, Two Frameworks,
 > and What Happens When You Re-Measure the Baseline**
