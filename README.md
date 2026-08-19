@@ -1,8 +1,10 @@
 # SkillOS
 
-Open reproduction of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Google Cloud AI Research + UIUC + MIT, 2026). The paper trains a curator with GRPO on 16 H100s using verl. We reproduced it on 8 H100s in **both** [TRL](https://github.com/huggingface/trl) and [verl-agent/GiGPO](https://github.com/langfengQ/verl-agent) — seven full 60-step training runs, ~2 months of box time — with all training and eval code, three benchmarks (ALFWorld + AIME + GPQA-Diamond), and every deviation logged.
+Open reproduction of ["SkillOS: Learning Skill Curation for Self-Evolving Agents"](https://arxiv.org/abs/2605.06614) (Ouyang et al., 2026). The paper trains a curator with GRPO on 16 H100s using verl. We reproduced it on 8 H100s in **both** [TRL](https://github.com/huggingface/trl) and [verl-agent/GiGPO](https://github.com/langfengQ/verl-agent) — seven full 60-step training runs, ~3 months of box time — with all training and eval code, three benchmarks (ALFWorld + AIME + GPQA-Diamond), and every deviation logged.
 
-Short version of what we found: the method works, the effect is smaller and far less stable than a single reported number suggests, it transfers better to a *bigger* executor than to the one it trained against, and the paper's cross-domain transfer claim comes out with the opposite sign. Details in [`docs/repro_report.md`](docs/repro_report.md).
+**This reproduction was run almost entirely by an LLM agent** (Claude, Anthropic) working continuously for three months, with a human author setting scope, funding compute, and adjudicating disputes. The agent wrote the training code, ran the experiments, found and fixed its own bugs, retracted its own results when it found a stale baseline, and kept a failure record that a second pass of agents then audited. Section 6.8 of the paper reports this as a result in its own right: 185 failures counted, half missing from the agent's own records, and a taxonomy of what went wrong that we think is useful for anyone planning to delegate research to an agent. The short version: "replicate this and don't stop" is the wrong instruction, because stopping is when someone checks where a number came from.
+
+Short version of what we found: the method works, the effect is smaller and far less stable than a single reported number suggests, and it transfers better to a *bigger* executor than to the one it trained against. Details in [`docs/repro_report.md`](docs/repro_report.md).
 
 <p align="center">
   <img src="assets/banner.png" alt="SkillOS Training Loop" width="720" />
@@ -62,14 +64,16 @@ Reproduces at parity with the paper — baseline stochasticity is ~±4pp, so rea
 
 | method | ours | paper | delta |
 |---|---|---|---|
-| No Memory | 33.6% | 47.9% | −14.3pp |
+| No Memory | 39.3–41.4% | 47.9% | −7 to −9pp |
 | SkillOS (best 8B curator, on 8B executor) | 47.1% (seed-2 ckpt35) | 61.2% | −14.1pp |
 
-The −14pp baseline gap is **environment-specific**: same executor reproduces the paper on reasoning within noise, so the ALFWorld gap is the ReAct/atomic-verb interaction, not model quality. Details: [`DIVERGENCES.md`](DIVERGENCES.md) #13, gotcha `executor-atomic-verb-gap`.
+> **Baseline note.** An earlier version of this table reported 33.6% as the no-memory baseline. That was measured in May against a hosted endpoint and drifted ~6pp by the time treatments were measured. The contemporaneous replicates are 39.3%, 39.3%, 41.4%. All sweep tables in the report were computed against 33.6% and are retained as measured with a correction note; paired lifts against a contemporaneous reference are 3–8pp smaller and none survives multiplicity correction.
+
+The remaining baseline gap is **environment-specific**: same executor reproduces the paper on reasoning within noise, so the ALFWorld gap is the ReAct/atomic-verb interaction, not model quality. Details: [`DIVERGENCES.md`](DIVERGENCES.md) #13, gotcha `executor-atomic-verb-gap`.
 
 ## The training trajectory is non-monotone, and the peak moves
 
-Held-out lift over 60 training steps, every-5 sweep vs the canonical 33.6% baseline:
+Held-out lift over 60 training steps, every-5 sweep vs the original 33.6% baseline (see baseline note above — contemporaneous reference is ~40%, so lifts are inflated by ~6pp):
 
 | run | peak ckpt | peak lift | p | ckpt60 lift |
 |---|---|---|---|---|
@@ -189,7 +193,7 @@ Confirmed:
 - **The reward machinery is healthy** — within GRPO groups `r_task` supplies 78.9% of the reward variance the advantage sees, and all 80 logged groups had non-zero `r_task` variance. Task reward still only moved +0.035 (95% CI ±0.034) over 60 steps while policy entropy collapsed 0.139 → 0.035.
 - Cross-executor transfer at parity with the paper: 8B-trained curator lifts a 32B executor to **62.9%** (+13.6pp, p=0.0043; paper reports 61.2%)
 - **Curator quality does not transfer across executor scale**: pooled Pearson r = −0.20 over 24 checkpoint pairs, −0.68 within seed-2, where the on-8B peak transfers to −4.3pp on 32B. The best 32B curator is seed-3 **ckpt5** — five GRPO steps in. Sweep on your target executor.
-- **Cross-domain transfer reverses sign vs the paper**: a reasoning-trained curator on ALFWorld scores −14 to −18pp (p ≤ 0.0005) at every checkpoint past step 40, against the paper's +13.3pp claim. These are the only results that survive multiplicity correction comfortably.
+- **Cross-domain transfer: one correction-surviving positive, unstable.** ~~An earlier version reported −14 to −18pp — retracted, those arms ran during an API outage (see [Appendix G](docs/repro_report.md)).~~ Re-measured: ckpt60 gives **+11.2pp on held-out `valid_unseen`** (p=0.0026, survives Holm), but adjacent checkpoints show nothing. The effect is real at exactly one unstable point.
 - Reasoning curator training is a **null** on same-domain eval (best ckpt30, −0.8pp vs the 61.2% aggregate baseline)
 - Reasoning baselines reproduce the paper within 1.1σ on average across AIME24/25 + GPQA-D
 - ALFWorld baseline gap is env-specific (the same executor matches the paper on reasoning)
@@ -199,7 +203,7 @@ Suggestive (directional, underpowered):
 
 Open:
 - **WebShop untouched.** The paper's third benchmark; we deliberately skipped it once the cross-domain claim became testable via the reasoning→ALFWorld direction. The three-benchmark averages are therefore out of reach.
-- **The 14pp 8B ALFWorld baseline gap** (33.6% vs the paper's 47.9%). Ruled out: prompt wording, retrieval, seeds, serving precision, decode parameters. Remaining suspect is the ReAct/atomic-verb interaction. DIVERGENCES #13.
+- **The 8B ALFWorld baseline gap** (39–41% vs the paper's 47.9%). Ruled out: prompt wording, retrieval, seeds, serving precision, decode parameters. Remaining suspect is the ReAct/atomic-verb interaction. DIVERGENCES #13.
 - Higher-n everything — n=140 gives a ~±3pp noise floor, so the 7pp effects this method produces are inherently marginal at this sample size.
 
 ## Hardware
@@ -234,6 +238,36 @@ accordingly before reproducing.
 - [ALFWorld](https://github.com/alfworld/alfworld) — household tasks
 - [rank-bm25](https://github.com/dorianbrown/rank_bm25) — skill retrieval
 - [inference.sh](https://inference.sh) — remote executor + judge
+
+## The auto-research angle
+
+This project is also a case study in agent-run research. The full account is in the paper (Section 6.8) and a public article (forthcoming), but the highlights:
+
+**185 failures in 3 months, audited by 8 independent reviewer agents.** Half were missing from the project's own records. The agent documented scientific failures unprompted (bad statistics, corrupted rewards, retracted results) but almost never documented operational ones (killing its own processes, idle GPUs, wrong estimates). Our best guess: a scientific failure can be framed as a discovery; an operational one can only be framed as incompetence.
+
+**The four most expensive mistakes were all the same mistake.** A baseline believed because it was written down. A library setting believed because of a comment. A fix believed because it matched the error message. A run believed because the dashboard was green. None needed a smarter model. Each needed a pause.
+
+**Seven gates that would have caught most of it**, ordered by return per minute of effort:
+
+1. Diff config against the paper's hyperparameter table before launching, mechanically
+2. Never let a missing measurement become a number — carry an `unmeasured` flag to the gradient
+3. Print the quantity that should be invariant (positions measured, denominator, coercion rate)
+4. Measure a contemporaneous control in the same week as the treatment
+5. Report a minimum detectable effect beside every claimed improvement
+6. If a fix doesn't move the number, the diagnosis was wrong
+7. Watch the box, not the job — ~11.8 box-days of 8 H100s sat idle because the supervisor stopped, not the run
+
+At least 30 box-days on an 8-GPU node were lost to runs that started, looked healthy, produced numbers, and were later found to have been training against something wrong. The dominant cost was not crashes or bad reasoning. It was silent correctness failures and idle hardware.
+
+**Key files:**
+
+| file | what |
+|---|---|
+| [`docs/paper/06b_autoresearch.md`](docs/paper/06b_autoresearch.md) | Paper section 6.8: taxonomy, costs, gates, what the audit overturned |
+| [`docs/failure_ledger.md`](docs/failure_ledger.md) | All 185 failures in 8 period tables + 14 cross-cutting modes |
+| [`JOURNAL.md`](JOURNAL.md) | The raw engineering log, dated, with dead ends |
+| [`DIVERGENCES.md`](DIVERGENCES.md) | Every departure from the paper, including our own bugs |
+| [`scripts/preflight_launch.py`](scripts/preflight_launch.py) | The launch gate: 22 CPU-only checks, verified to fail on the configs that cost GPU-days |
 
 ## References
 
