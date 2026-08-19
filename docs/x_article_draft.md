@@ -100,7 +100,7 @@ On 20 July my API credentials broke for about two hours. Four checkpoints happen
 
 ![My best finding was an outage, not a result](docs/figures/article/a3_the_bug.png)
 
-Re-run with the bug fixed, the same four checkpoints come back at −0.7, +4.3, −2.9 and −5.7 points, every p above 0.13. The cliff is not smaller. **It does not exist.** Cross-domain transfer, honestly measured, is nothing at all in my setup: neither the paper's +13.3 nor my imaginary −17.
+Re-run with the bug fixed, the same four checkpoints come back at −0.7, +4.3, −2.9 and −5.7 points, every p above 0.13. The cliff is not smaller. **It does not exist.** The negative direction was the outage. But there is a positive signal, and it appeared where I was not looking: a *different* checkpoint on the held-out split gives +11.2pp, p=0.0026, and it is the only result in the project that survives correction for the family it belongs to. Its two adjacent checkpoints show nothing. So cross-domain transfer is real at exactly one point, unstable, and the wrong one to stake a conclusion on. Neither the paper's clean +13.3 nor my imaginary −17. The honest version is messier and more interesting than either.
 
 Two things I would rather you took from this than from any number in this article.
 
