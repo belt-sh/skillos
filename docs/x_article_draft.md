@@ -166,6 +166,32 @@ Worth noting the well-funded versions report the same shape of problem. Recursiv
 
 There is a neat symmetry in it, too. SkillOS is itself a self-improving-agent paper. So this is a self-improving-agent method, reviewed by a mostly-autonomous research process, and both halves gave the same answer: it works, it is less reliable than the headline suggests, and you only find out by measuring more carefully than anyone wants to.
 
+### If you want to try this, read this part
+
+This is the section I wish I had read in May. It is six things, they are all cheap, and between them they cover most of what this project spent on being wrong.
+
+But first, the mistake in the setup, because it is the one everybody is about to make.
+
+**"Replicate this paper and don't stop" is the wrong instruction, and it is the one I gave.** It worked in the sense that it was followed. Three months, crashes recovered without me, never once needed a nudge. What I did not think about is what stopping is *for*. Stopping is when somebody asks where a number came from. Take the pauses out and you do not get a careless agent, you get a fast one whose results go straight into the next decision. Look back at the four failures above and none of them is a reasoning error. They are all numbers that got *used* before anyone questioned them. A baseline reused for ten weeks. A length limit trusted for eleven. A judge scoring zero for five hours while the run was being described to me as encouraging. Not one of those needed a smarter model. Each needed a pause.
+
+So the question is not whether it can do the research. Mostly it can. The question is what has to be true before you are allowed to use what it hands you. Here is what I would gate:
+
+**1. Diff your config against the paper's table before you launch, in code, and refuse to start on a mismatch.** This is the big one. It takes under a second, it needs no GPU, and it would have caught five separate fidelity bugs here, including ten box-days at double the paper's batch size and a first day where the agent under test was crippled by a setting its own comment told us to change. Every single one was an inherited default that looked deliberate. Write the paper's numbers in a file, compare, fail loud, and list your intentional differences with a reason so a silent drift cannot pretend to be one.
+
+**2. Never let a missing measurement become a number.** Eight places in this codebase quietly did that. Once a missing value gets a plausible stand-in, nothing downstream can tell it apart from a real one, and it does not error, ever. Carry a flag that says "not measured" all the way to the gradient. And make your error markers say *why* they fired, because a marker that only says something went wrong tells you nothing at 3am.
+
+**3. Print the number that should never change.** Positions measured. Tasks drawn. Coercion rate. The single most valuable thing produced in three months was one print statement of this kind, and it is what caught the eleven-week bug. Here is the trick to it: a check that asserts a symptom is *absent* will be satisfied by your next bug. A line that reports a *quantity* cannot be. Print quantities. It will look pointless the day you write it. That is what makes it worth writing.
+
+**4. Measure your baseline in the same week as the thing you are comparing it to.** Not the same month. I took one baseline in May against a hosted API and used it as the reference all summer. Remeasured, it had moved nearly six points. Everything I had "improved" was partly a measurement of someone else's server. Three seeds and two frameworks all agreed with each other and that felt like proof. It was not, because all three were subtracting the same wrong number.
+
+**5. Write down what your test can actually detect, before you run it.** One line of arithmetic, no GPU. Mine says the standard 140-game benchmark can only resolve effects of about 13 points, and the effects this field publishes are about 13 points. Most of the compute I wasted went on chasing differences my instrument could not have seen.
+
+**6. If a fix does not move the number, that is information about your diagnosis.** It is not a reason to stack another fix on top. A crash asked for 4.6GB, we freed 8GB, the next crash asked for 14.2GB, and that number was computable before launching anything. Two launches to find out we had been aiming at the error message instead of the arithmetic.
+
+And one more, which is operational rather than scientific: **watch the box, not the job.** Around 11.8 days of an eight-GPU box sat idle in this project. Almost none of that was crashes. It was the run finishing or dying while the thing supposed to notice had itself stopped. Idle GPUs are invisible to the only metric anyone checks, which is whether the run is up.
+
+Add it up and the shape is not what I expected going in. I assumed the enemy would be crashes and bad ideas. The actual cost was **runs that started, looked healthy, produced numbers, and turned out to have been training against something wrong**, plus a box doing nothing while I thought it was busy. At least 30 box-days out of thirteen weeks, and eleven of those thirteen weeks trained on three tenths of the protocol without a single error message. Nothing on that list is a hard problem. Half of it is arithmetic you can do on your phone before you launch.
+
 ## Why I spent ten weeks on this
 
 Disclosure of interest, since it shaped which claim I chased: I build [inference.sh](https://inference.sh), and this paper argues my bet.

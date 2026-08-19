@@ -274,29 +274,94 @@ intervention we tried.
 
 ## 6.x.5 What we would require of the next one
 
-Every item below is a counter-measure the project adopted only after paying for
-its absence.
+### The instruction is part of the result
 
-1. **No missing measurement may take a numeric value.** Carry an explicit
+The reproduction can be summarised as one instruction and its consequences. The
+instruction was, in substance, *reproduce this paper and do not stop.* It was
+followed. The agent ran for three months, recovered from crashes unattended, and
+never once needed to be told to keep going.
+
+It is worth being precise about what that instruction optimises. Stopping is when
+a number gets checked. "Do not stop" does not make an agent careless in the
+moment; every individual decision in this project was locally reasonable, and the
+agent's own reasoning was rarely the weak link. What continuous operation removes
+is the interval in which a result sits unused long enough for somebody to ask
+where it came from. Of the failures in §6.x.2, the expensive ones are not errors
+of reasoning at all. They are results that were *used* before they were
+questioned: a baseline reused for ten weeks, a length limit trusted for eleven,
+a judge whose score was zero for five hours while the run was described as
+encouraging. Each of those needed a pause, not more intelligence.
+
+So the useful framing is not "can an agent do the research" — on this evidence,
+largely yes — but **what has to be true before its output may be used.** The
+items below are that, stated as gates. Every one was adopted only after paying
+for its absence, and the price is given so the trade can be judged rather than
+taken on faith.
+
+### The gates, ordered by return
+
+1. **Diff the configuration against the paper's hyperparameter table before
+   launching**, mechanically, and fail the launch on any mismatch that is not
+   listed as a deliberate departure with a reason. *Price of its absence: five
+   separate fidelity defects, all inherited defaults that looked deliberate,
+   including a run at twice the paper's batch size (~10 box-days) and a first
+   24 hours against a crippled executor.* This is a CPU-only check that runs in
+   under a second. It is the highest-yield item on the list by a wide margin, and
+   it is the one that feels most like bureaucracy at the moment you skip it.
+2. **No missing measurement may take a numeric value.** Carry an explicit
    `unmeasured` flag all the way to the gradient and neutralise those rollouts
-   within their group. Sentinels must say why.
-2. **Print the quantity that should be invariant**, per rollout, in the training
-   log: positions measured, distinct tasks drawn, coercion rate. Tripwires that
-   assert the absence of a symptom can be satisfied by the next bug.
-3. **Measure a contemporaneous control in the same session as every treatment.**
-   A control measured against a hosted endpoint is a measurement of that endpoint
-   on that day.
-4. **Report a minimum detectable effect beside every claimed improvement.** One
-   line, and it would have prevented most of the wasted effort here.
-5. **Diff the configuration against the paper's hyperparameter table before
-   launching**, mechanically. Five separate fidelity defects in this project were
-   inherited defaults that looked deliberate.
+   within their group. *Price: eight distinct instances, of which the worst
+   silently trained on approximately three of ten protocol positions for eleven
+   weeks.* The general form of the bug is that a plausible substitute for a
+   missing measurement is indistinguishable, downstream, from a real one. A
+   sentinel that cannot say **why** it fired is not instrumentation.
+3. **Print the quantity that should be invariant**, per rollout, in the training
+   log: positions measured, distinct tasks drawn, coercion rate, denominator.
+   *Price: the eleven-week defect above was found by one print statement, written
+   in an afternoon, on a day when it looked certain to report nothing.* Note the
+   asymmetry that makes this cheap and makes people skip it anyway: a tripwire
+   that asserts the **absence of a symptom** can be satisfied by the next bug,
+   whereas a line that reports a **quantity** cannot.
+4. **Measure a contemporaneous control in the same session as every treatment.**
+   *Price: one baseline taken once against a hosted endpoint and reused all
+   summer; when remeasured it had moved almost six points, and every improvement
+   in the project was partly a measurement of somebody else's server changing.*
+   Three seeds and two frameworks agreeing did not protect us, because agreement
+   between runs guards against noise and not against a shared reference.
+5. **Report a minimum detectable effect beside every claimed improvement.** *One
+   line of arithmetic, no GPU, and it reframed the study: the standard 140-game
+   protocol resolves effects of about 13 points, which is the size of the effect
+   this literature reports.* Most of the wasted effort in this project was spent
+   chasing differences the instrument could not have resolved.
 6. **Treat "the fix did not move the number" as evidence about the diagnosis**,
-   not as a reason to add another fix.
+   not as a reason to add another fix. *Price: a memory crash that asked for
+   4.6 GB was answered with 8 GB of headroom; the next crash asked for 14.2 GB,
+   a figure computable in advance from batch times sequence length times
+   vocabulary.* Two launches to discover the fix had been aimed at the traceback
+   rather than at the arithmetic.
 7. **Write the failure record as a gate, not as a final task**, and have it
-   audited by something that is not the process that made the mistakes. Half of
-   what happened here was missing from a record kept diligently and in good faith
-   throughout.
+   audited by something other than the process that made the mistakes. *Price:
+   roughly half of what happened here was missing from a record kept diligently,
+   unprompted, and in good faith throughout* (§6.x.1), *and the audit of that
+   record was itself wrong in a different way* (§6.x.6).
+
+### What this costs and what it saves
+
+Items 1, 5, 6 and the audit half of 7 consume no GPU time at all. Item 3 is a
+print statement. Of the incidents they address, the ones we can price come to at
+least **~30 box-days on an eight-GPU node**, or about 240 GPU-days, across a
+project of thirteen elapsed weeks: ~8 box-days of runs on a degenerate task
+distribution, ~10 at the wrong batch size, and ~11.8 box-days of idle GPUs while
+the agent had stopped and nothing was watching. Separately, and not included in
+that total because it overlaps everything, eleven of the thirteen weeks trained
+against approximately three tenths of the protocol.
+
+That last figure is the one we would put in front of anyone planning a similar
+project. **The dominant cost was not crashes, and it was not bad reasoning.** It
+was runs that started, looked healthy, produced numbers, and were later found to
+have been training against something wrong; plus a box sitting idle because the
+thing that had stopped was the supervisor, not the job. Both categories are
+invisible to the metric everyone watches, which is whether the run is up.
 
 ## 6.x.6 What the verification pass changed
 
