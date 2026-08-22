@@ -2,7 +2,7 @@
 
 SkillOS trains a curator model with GRPO to maintain a markdown skill repository
 for a frozen executor, and reports a 13.3 percentage point improvement in
-ALFWorld task success. We reproduced the method on 8xH100, across seven complete
+ALFWorld task success. We reproduced the method on 8xH100, across eight complete
 60-step training runs in two independent RL frameworks (TRL with ZeRO-3 and
 verl-agent/GiGPO with FSDP), three seeds, two executor scales, and approximately
 one hundred evaluation arms of 140 paired games each.

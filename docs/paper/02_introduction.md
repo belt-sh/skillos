@@ -16,7 +16,7 @@ if a small trained curator can lift a frozen agent by 13pp, that is a cheap and
 deployable technique, and we wanted it working before building on it.
 
 This paper reports what happened over roughly three months of 8xH100 time and
-seven complete 60-step training runs. The short version is that the method works,
+eight complete 60-step training runs. The short version is that the method works,
 the cross-executor transfer claim reproduces at parity, but the same-agent
 ALFWorld lift does not survive contemporaneous controls or multiplicity
 correction, and the most useful thing we learned was about measurement.

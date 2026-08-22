@@ -93,6 +93,22 @@ them.
    gap remains unexplained and is the strongest single indication that something
    in our setup differs from theirs in a way we have not found.
 
+### 4.4.1 The completion-budget truncation and the paper-faithful rerun
+
+Our first six TRL training runs shared an undetected fidelity gap: TRL enforces
+`max_completion_length` against the accumulated multi-turn completion, not per
+response. At the paper's 4,096-token setting, a ten-position rollout was
+truncated at roughly three positions, so the curator was optimised on 2.3 of
+the 9 informed positions the paper specifies. The issue was invisible because a
+truncated rollout is indistinguishable from a completed one.
+
+The final TRL run (`dense10`) corrected both causes — raising the completion
+budget to 16,384 tokens and the phase deadline to 5 hours — and completed the
+full 60-step schedule. Its training-time health: median 9 of 9 informed
+positions measured in 85% of batches, action coercion 0.09%, zero early exits.
+This run is the paper-faithful TRL witness to the same-agent result, and its
+evaluation is reported in Section 5.2.
+
 ## 4.5 Conduct of the study: an LLM agent as the running experimentalist
 
 This study was executed by a large language model agent (Claude, Anthropic)

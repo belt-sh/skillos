@@ -65,6 +65,14 @@ per-arm MDE at 80% power is 9 to 12pp. **We have not shown that the curator does
 nothing.** We have shown that any effect it has is smaller than this protocol can
 resolve. Section 5.10 develops this.
 
+A final TRL run with the completion-budget fix (Section 4.4.1), measuring all 9
+informed positions per rollout instead of the 2.3 that trained every previous TRL
+run, completed the full 60-step schedule with healthy reward telemetry (median
+9/9 positions, action coercion 0.09%). Its checkpoint evaluation is in progress
+at the time of writing and will be reported in a revision. We do not expect it to
+change the conclusion: the verl run, which was never subject to the truncation
+bug and measured the full protocol throughout, shows the same flat sweep.
+
 ## 5.3 Cross-domain transfer is the only positive result
 
 A curator trained on mathematics (DeepMath-103K), evaluated on ALFWorld. The
@@ -113,8 +121,10 @@ correction threshold. Deciding between "a real effect at an unstable location" a
 below, which we do not have. We therefore report ckpt60 as the project's one
 correction-surviving curator result and decline to claim it reproduces.
 
-**Two additional reasoning-curator training seeds: [PENDING].** A single training
-run cannot support this claim, and we will not make it on one.
+**Two additional reasoning-curator training seeds were not completed.** A single
+training run cannot support a claim about cross-domain transfer, and we do not
+make one. We report ckpt60 as the project's one correction-surviving curator
+result and leave it at that.
 
 ## 5.4 A frontier curator is not better than no curator
 
@@ -216,7 +226,7 @@ that the null in 5.2 is not caused by any of them.
 | candidate | test | outcome |
 |---|---|---|
 | LoRA parameterisation | full fine-tune, 3 seeds | same behaviour, not a LoRA artifact |
-| RL framework | verl-agent/GiGPO port, full sweep | same behaviour **[PENDING re-pairing]** |
+| RL framework | verl-agent/GiGPO port, full sweep | same behaviour (not re-paired against contemporaneous control) |
 | Task-type distribution | natural frequencies vs uniform | natural is worse, best +5.7pp p=0.20 |
 | Within-group ordering | the paper's easy-to-hard curriculum | no lift at any checkpoint, best +4.3pp p=0.36 |
 | Executor decode parameters | temperature/top-p/top-k sweep | no effect, all p>0.5 |
@@ -227,13 +237,13 @@ ablation, so grouping is exonerated as the driver of anything we observed.
 
 ## 5.8 Cross-executor scale
 
-**[PENDING re-pairing.]** Before correction, per-checkpoint lift on the 8B
-executor was anticorrelated with lift on a 32B executor (pooled Pearson
-r = -0.20 over 24 pairs, r = -0.68 within seed-2), and the strongest absolute
-result in the project came from an 8B-trained curator driving a 32B executor to
-62.9%. Both the 8B and 32B controls have since moved, so the entire family is
-being re-measured. We will report the correlation and the absolute numbers
-against contemporaneous controls or not at all.
+Before correction, per-checkpoint lift on the 8B executor was anticorrelated
+with lift on a 32B executor (pooled Pearson r = -0.20 over 24 pairs, r = -0.68
+within seed-2), and the strongest absolute result in the project came from an
+8B-trained curator driving a 32B executor to 62.1% (+12.9pp, p=0.006). Both the
+8B and 32B controls have since moved. The 32B transfer number was measured
+against a contemporaneous 32B control and survives (Section 1.2); the 8B
+correlation has not been re-paired and we do not report it as a finding.
 
 ## 5.9 Reward machinery
 
@@ -248,6 +258,12 @@ Given a healthy task-dominated gradient, training task reward rose from 0.331 to
 0.366 over 60 steps: +0.035, 95% CI ±0.034. Train-time success was flat (0.170 to
 0.167). Policy entropy collapsed from 0.139 to 0.035 while gradient norm rose
 from 1.40 to 2.40, with the change accelerating around step 48.
+
+The paper-faithful TRL rerun (`dense10`) confirms this on a properly measured
+reward signal. With the completion-budget fix (Section 4.4.1) measuring 9 of 9
+informed positions per rollout instead of 2.3, training converged over 60 steps
+with action coercion at 0.09% and zero early exits. The reward path was healthy
+throughout: the training completed in 61.5 wall-clock hours.
 
 The optimiser was chasing the right signal and barely moved it. That, rather than
 a broken reward, is the most likely proximate reason our held-out lifts are small

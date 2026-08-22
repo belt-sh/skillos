@@ -113,7 +113,8 @@ review.
 ## 7.5 Limitations we would fix with more time
 
 WebShop was never attempted. The reasoning-curator result rests on one training
-run pending two more. Our absolute baseline gap is unexplained. And the deepest
+run; the two additional seeds that would be needed to support a cross-domain
+claim were not completed. Our absolute baseline gap is unexplained. And the deepest
 limitation is one we can now quantify rather than fix: ALFWorld provides 274
 valid games in total, which caps a paired comparison at roughly 9pp resolution.
 Serious measurement of a 5pp agent-memory effect needs either a larger benchmark

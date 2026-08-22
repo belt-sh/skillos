@@ -464,7 +464,7 @@ def main():
                         "K>1 = wave-batched: K games share the same repo snapshot, curator "
                         "runs serially between waves. ~K× faster, small deviation.")
     p.add_argument("--max-steps", type=int, default=30)
-    p.add_argument("--executor", default="infsh", choices=["heuristic", "infsh"])
+    p.add_argument("--executor", default="infsh", choices=["heuristic", "infsh", "vllm"])
     p.add_argument("--executor-app", default="openrouter/qwen3-8b")
     p.add_argument("--executor-temperature", type=float, default=0.6,
                    help="Executor decode temp. Eval baseline 0.6; GiGPO/paper-faithful 0.4.")
@@ -514,6 +514,17 @@ def main():
             "max_tokens": 8192,
             "context_size": 32768,
             "reasoning_effort": args.executor_reasoning,
+        })
+    elif args.executor == "vllm":
+        exec_cfg.update({
+            "base_url": os.environ.get("VLLM_BASE_URL", "http://localhost:8002/v1"),
+            "model": "Qwen/Qwen3-8B",
+            "history_length": 3,
+            "temperature": args.executor_temperature,
+            "max_tokens": 2048,
+            "top_p": args.executor_top_p,
+            "top_k": args.executor_top_k if args.executor_top_k > 0 else None,
+            "enable_thinking": True,
         })
     from skillos.executor.executor import create_executor
     executor = create_executor(exec_cfg)

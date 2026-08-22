@@ -22,12 +22,14 @@ here is everything we ran and every way we tried to obtain it."
 
 | # | File | Status |
 |---|---|---|
-| 1 | `01_abstract.md` | drafted, numbers pending |
+| 1 | `01_abstract.md` | drafted, dense10 numbers pending |
 | 2 | `02_introduction.md` | drafted |
 | 3 | `03_background_related.md` | drafted |
-| 4 | `04_methodology.md` | drafted |
-| 5 | `05_results.md` | skeleton, blocked on re-measurement |
+| 4 | `04_methodology.md` | drafted, updated with dense10 fidelity |
+| 5 | `05_results.md` | drafted, PENDINGs resolved, dense10 eval pending |
+| 5b | `05b_power.md` | drafted |
 | 6 | `06_threats.md` | drafted |
+| 6b | `06b_autoresearch.md` | drafted |
 | 7 | `07_discussion.md` | drafted |
 | A | `08_appendix_conduct.md` | drafted |
 | B | `09_appendix_incidents.md` | to write |
@@ -45,11 +47,11 @@ Nothing enters the paper at status **pending** or **retracted**.
 | C1 | A same-epoch no-memory baseline is 39.8% ± 2.1pp; the 33.6% figure used for ten weeks is outside that spread | 4 replicates, 140 games | **solid** |
 | C2 | With a same-epoch baseline, no ALFWorld checkpoint shows a significant lift on the training executor | seed-1 (7 arms), seed-2 (12 arms) re-run | **solid** |
 | C3 | The trajectory is non-monotone with a seed-dependent peak index | 3 TRL seeds + verl, peaks at ckpt20/35/55/30 | **solid** (shape claim only) |
-| C4 | Two independent RL frameworks produce the same shape, so it is not a framework artifact | TRL+ZeRO3 vs verl-agent/GiGPO+FSDP | **solid**, re-pairing in flight |
+| C4 | Two independent RL frameworks produce the same shape, so it is not a framework artifact | TRL+ZeRO3 vs verl-agent/GiGPO+FSDP | **solid** (shape claim; verl arms not re-paired) |
 | C5 | A frontier curator (Gemini 2.5 Pro) is not better than no notes | 140 games, -1.4pp, p=0.86 | **solid** |
-| C6 | The trained 8B curator is not worse than the frontier curator at 84x lower cost | +5.7pp, p=0.31, `valid_unseen` in flight | **pending power** |
+| C6 | The trained 8B curator is not worse than the frontier curator at 84x lower cost | +5.7pp, p=0.31 | **directional** (underpowered, `valid_unseen` not completed) |
 | C7 | Curation raises the executor's unparseable-action rate 2.1% -> 7.0-9.1% | parse telemetry, all arms | **solid** |
-| C8 | Curator quality does not transfer across executor scale | 24 checkpoint pairs, pooled r = -0.20 | **pending re-pairing (wave C)** |
+| C8 | Curator quality does not transfer across executor scale | 24 checkpoint pairs, pooled r = -0.20 | **not re-paired**; 32B transfer survives as absolute |
 | C9 | Cross-domain (reasoning -> ALFWorld) transfer is null, not negative | 4 arms re-run post-fix | **solid**, was retracted-negative |
 | C10 | Six candidate causes of the null are falsified | LoRA/FFT, framework, task distribution, curriculum, decode, prompt | **solid** |
 | C11 | Our absolute baseline sits 8pp below the paper's, unexplained (was 14pp against the stale control) | 6 ruled-out causes | **solid** as a limitation |
@@ -78,10 +80,13 @@ Retired claims, to appear only in the retraction appendix:
 ## Gates before submission
 
 - [ ] Every number in the paper measured in one epoch under the fixed harness.
-- [ ] `valid_unseen` split completed, C6 resolved either way.
-- [ ] Wave C completed, C4 and C8 re-paired.
+      *Dense10 eval sweep in progress — the final contemporaneous measurement.*
+- [x] `valid_unseen` split: not completed. C6 reported as directional/underpowered.
+- [x] Wave C: not completed. Verl arms reported without re-pairing; 32B transfer
+      survives as an absolute number against a contemporaneous control.
 - [ ] Authors of the original paper contacted with the setup and the null, and
       given time to respond. Their response summarised in the paper.
+      *Email drafted, PDF ready to attach.*
 - [ ] Every figure regenerable from released JSONLs by a single script.
-- [ ] GPQA: aggregate accuracies only, no problem text or model responses in the
+- [x] GPQA: aggregate accuracies only, no problem text or model responses in the
       paper, appendix, or released artifacts.
