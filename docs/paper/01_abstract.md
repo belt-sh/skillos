@@ -14,14 +14,14 @@ without pathology. On the paper's strongest claim, cross-executor transfer, an
 with the paper's 61.2%. A cross-domain curator trained on mathematics yields
 +11.2pp on a held-out ALFWorld split (p=0.003, survives Holm correction).
 
-What we could not reproduce is the stability. Across 50 checkpoint arms on the
-training executor, no same-agent improvement survives multiplicity correction,
-the lift oscillates between runs with peaks moving across seeds, and the final
-checkpoint is never the best. We traced part of this to a control measured once
-and reused for ten weeks; re-measuring it moved it 5.7pp, which is larger than
-most effects claimed in this literature. Re-paired against a contemporaneous
-control, our strongest ALFWorld-on-ALFWorld result (+13.6pp, p=0.0026) becomes
-+3.6pp, p=0.47.
+What we could not reproduce is the stability. Across over 60 checkpoint arms on
+the training executor, no same-agent improvement survives multiplicity correction,
+including a paper-faithful run measuring all 9 informed positions per rollout
+where no checkpoint exceeds the control. We traced part of this to a control
+measured once and reused for ten weeks; re-measuring it moved it 5.7pp, which is
+larger than most effects claimed in this literature. Re-paired against a
+contemporaneous control, our strongest ALFWorld-on-ALFWorld result (+13.6pp,
+p=0.0026) becomes +3.6pp, p=0.47.
 
 We additionally report: (1) substituting Gemini 2.5 Pro for the trained curator,
 at 84x the cost, yields no improvement over writing no notes at all, confirming

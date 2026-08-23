@@ -22,11 +22,11 @@ here is everything we ran and every way we tried to obtain it."
 
 | # | File | Status |
 |---|---|---|
-| 1 | `01_abstract.md` | drafted, dense10 numbers pending |
+| 1 | `01_abstract.md` | **final** |
 | 2 | `02_introduction.md` | drafted |
 | 3 | `03_background_related.md` | drafted |
 | 4 | `04_methodology.md` | drafted, updated with dense10 fidelity |
-| 5 | `05_results.md` | drafted, PENDINGs resolved, dense10 eval pending |
+| 5 | `05_results.md` | **final** — dense10 sweep integrated |
 | 5b | `05b_power.md` | drafted |
 | 6 | `06_threats.md` | drafted |
 | 6b | `06b_autoresearch.md` | drafted |
@@ -79,8 +79,8 @@ Retired claims, to appear only in the retraction appendix:
 
 ## Gates before submission
 
-- [ ] Every number in the paper measured in one epoch under the fixed harness.
-      *Dense10 eval sweep in progress — the final contemporaneous measurement.*
+- [x] Every number in the paper measured in one epoch under the fixed harness.
+      *Dense10 eval sweep complete. 12 arms, all at or below baseline.*
 - [x] `valid_unseen` split: not completed. C6 reported as directional/underpowered.
 - [x] Wave C: not completed. Verl arms reported without re-pairing; 32B transfer
       survives as an absolute number against a contemporaneous control.

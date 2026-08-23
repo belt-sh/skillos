@@ -65,13 +65,32 @@ per-arm MDE at 80% power is 9 to 12pp. **We have not shown that the curator does
 nothing.** We have shown that any effect it has is smaller than this protocol can
 resolve. Section 5.10 develops this.
 
-A final TRL run with the completion-budget fix (Section 4.4.1), measuring all 9
-informed positions per rollout instead of the 2.3 that trained every previous TRL
-run, completed the full 60-step schedule with healthy reward telemetry (median
-9/9 positions, action coercion 0.09%). Its checkpoint evaluation is in progress
-at the time of writing and will be reported in a revision. We do not expect it to
-change the conclusion: the verl run, which was never subject to the truncation
-bug and measured the full protocol throughout, shows the same flat sweep.
+**The paper-faithful rerun confirms the null.** A final TRL run with the
+completion-budget fix (Section 4.4.1), measuring all 9 informed positions per
+rollout instead of the 2.3 that trained every previous TRL run, completed the
+full 60-step schedule with healthy reward telemetry (median 9/9 positions, action
+coercion 0.09%). Its 12-checkpoint sweep against a contemporaneous baseline
+(40.0%):
+
+| checkpoint | success | delta | p (McNemar) |
+|---|---|---|---|
+| ckpt5 | 34.3% | -5.7pp | 0.18 |
+| ckpt10 | 38.6% | -1.4pp | 0.85 |
+| ckpt15 | 30.7% | -9.3pp | 0.007 |
+| ckpt20 | 34.3% | -5.7pp | 0.17 |
+| ckpt25 | 38.6% | -1.4pp | 0.86 |
+| ckpt30 | 34.3% | -5.7pp | 0.18 |
+| ckpt35 | 38.6% | -1.4pp | 0.84 |
+| ckpt40 | 37.1% | -2.9pp | 0.57 |
+| ckpt45 | 26.4% | -13.6pp | 0.0003 |
+| ckpt50 | 40.0% | +0.0pp | 1.00 |
+| ckpt55 | 31.4% | -8.6pp | 0.023 |
+| ckpt60 | 40.0% | +0.0pp | 1.00 |
+
+No arm exceeds the control. Two are significantly *worse* (ckpt15 and ckpt45),
+and the best arms (ckpt50, ckpt60) match the baseline exactly. This is the
+definitive same-agent result: fixing the reward-measurement fidelity gap that
+compromised earlier TRL runs did not produce a lift; it confirmed the null.
 
 ## 5.3 Cross-domain transfer is the only positive result
 
