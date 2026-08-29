@@ -16,7 +16,7 @@ if a small trained curator can lift a frozen agent by 13pp, that is a cheap and
 deployable technique, and we wanted it working before building on it.
 
 This paper reports what happened over roughly three months of 8xH100 time and
-eight complete 60-step training runs. The short version is that the method works,
+ten complete 60-step training runs. The short version is that the method works,
 the cross-executor transfer claim reproduces at parity, but the same-agent
 ALFWorld lift does not survive contemporaneous controls or multiplicity
 correction, and the most useful thing we learned was about measurement.
@@ -44,11 +44,13 @@ supplies 79% of the reward variance that reaches the gradient, the training
 converges without pathology, and the curators produce coherent skill
 repositories.
 
-Two of the paper's claims reproduce. **Cross-executor transfer** reproduces at
-parity: an 8B-trained curator lifts a 32B executor to 62.1% (the paper reports
-61.2%). **Cross-domain transfer** yields a correction-surviving positive on a
-held-out split: a mathematics-trained curator gives +11.2pp (p=0.003, survives
-Holm), though adjacent checkpoints show nothing.
+One of the paper's claims reproduces cleanly. **Cross-executor transfer**
+reproduces at parity: an 8B-trained curator lifts a 32B executor to 62.1% (the
+paper reports 61.2%). **Cross-domain transfer** is directionally positive — a
+mathematics-trained curator helps an ALFWorld executor in two of three seeds —
+but no arm reaches significance across three seeds and twelve checkpoint arms,
+and the one result that previously survived Holm correction (+11.2pp) does not
+replicate.
 
 What does not reproduce is a stable same-agent ALFWorld lift. For most of those
 three months we believed we had one: every sweep contained a significant-looking

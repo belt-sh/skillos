@@ -52,7 +52,7 @@ Nothing enters the paper at status **pending** or **retracted**.
 | C6 | The trained 8B curator is not worse than the frontier curator at 84x lower cost | +5.7pp, p=0.31 | **directional** (underpowered, `valid_unseen` not completed) |
 | C7 | Curation raises the executor's unparseable-action rate 2.1% -> 7.0-9.1% | parse telemetry, all arms | **solid** |
 | C8 | Curator quality does not transfer across executor scale | 24 checkpoint pairs, pooled r = -0.20 | **not re-paired**; 32B transfer survives as absolute |
-| C9 | Cross-domain (reasoning -> ALFWorld) transfer is null, not negative | 4 arms re-run post-fix | **solid**, was retracted-negative |
+| C9 | Cross-domain transfer is directionally positive but not significant across 3 seeds | 12 arms (4 ckpts × 3 seeds), valid_unseen, contemporaneous control | **solid** — retracted as a positive, reported as directional |
 | C10 | Six candidate causes of the null are falsified | LoRA/FFT, framework, task distribution, curriculum, decode, prompt | **solid** |
 | C11 | Our absolute baseline sits 8pp below the paper's, unexplained (was 14pp against the stale control) | 6 ruled-out causes | **solid** as a limitation |
 | C12 | Within-group reward variance is task-dominated (79%), so the optimiser chases the right signal | 850 verl rollouts, 80 groups | **solid** |
@@ -61,6 +61,9 @@ Retired claims, to appear only in the retraction appendix:
 
 - "Held-out lift is real at some checkpoint in every run (+7.1 to +13.6pp)."
   Void: paired against the drifted baseline.
+- "Cross-domain transfer survives Holm correction (ckpt60 +11.2pp, p=0.003)."
+  Void: does not replicate across seeds; seed-1 is flat against a contemporaneous
+  control, and no arm in any seed reaches p<0.05.
 - "Cross-domain transfer reproduces with the opposite sign (-14 to -18pp)."
   Void: measured during an API outage the harness scored as task failure.
 

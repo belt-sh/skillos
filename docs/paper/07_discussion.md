@@ -7,17 +7,16 @@ against a composite reward produces coherent skill repositories, the reward
 gradient is dominated by downstream task success as intended, and the training
 runs converge without pathology.
 
-Two results reproduce. Cross-executor transfer, the paper's strongest practical
-claim, holds at parity: an 8B-trained curator lifts a 32B executor to 62.1%
-against the paper's 61.2%. A mathematics-trained curator produces the project's
-only correction-surviving lift on a held-out ALFWorld split (+11.2pp, p=0.003),
-though adjacent checkpoints are null.
+One result reproduces cleanly. Cross-executor transfer, the paper's strongest
+practical claim, holds at parity: an 8B-trained curator lifts a 32B executor to
+62.1% against the paper's 61.2%.
 
-What we could not find is a stable same-agent ALFWorld effect. Over seven
-training runs and roughly one hundred evaluation arms, no ALFWorld-trained
-curator produced a significant improvement on the executor it trained against,
-once measured against a control from the same week. The effect is not absent; it
-is smaller than this protocol can resolve.
+What we could not find is a stable curator lift of any kind on the 8B training
+executor. Over eight training runs and roughly one hundred evaluation arms, no
+ALFWorld-trained curator produced a significant improvement, and the cross-domain
+result that appeared to survive Holm correction on one seed (+11.2pp) does not
+replicate across three seeds. The effect is not absent; it is smaller than this
+protocol can resolve.
 
 Three readings are consistent with our data, and we cannot distinguish them.
 
@@ -40,21 +39,18 @@ to find such a difference.
 
 ## 7.2 Cross-domain transfer
 
-The most interesting positive result is the unexpected one: a curator trained on
-mathematics helped an embodied agent, while curators trained on the embodied
-task did not. Ckpt60 survives Holm correction on the held-out split, but its
-adjacent checkpoints are null, so the effect is real at one unstable location.
+The seed-1 result that appeared strongest — a mathematics-trained curator lifting
+held-out ALFWorld by +11.2pp — does not replicate. Across three seeds and twelve
+checkpoint arms on `valid_unseen`, no arm reaches p<0.05 against a
+contemporaneous control (Section 5.3). The direction is positive more often than
+not (8 of 12 arms), and the best single arm is +6.7pp (p=0.12), so we do not
+claim the effect is absent. But it is not the clean positive we reported in
+earlier drafts.
 
-One explanation fits our other measurements. A curator trained on ALFWorld learns to
-write ALFWorld-specific procedures, which are long, and which compete with the
-action format for the executor's attention (Section 5.5). A curator trained on
-mathematics has no domain-specific procedures to write, so it writes shorter,
-more general problem-solving structure, which costs the executor less. Under that
-account the trained curator's advantage over Gemini 2.5 Pro is also
-unsurprising: the frontier model writes more, and more is worse here.
-
-We flag this as a hypothesis consistent with our data, not a finding. The skill
-content analysis in Appendix C tests it directly, and we will report what it says.
+The hypothesis from Section 5.5 still fits: a reasoning-trained curator writes
+shorter, more general notes that cost the executor less attention than
+ALFWorld-specific procedures do. But with no significant result to explain, we
+leave it as speculation.
 
 ## 7.3 The measurement result is the transferable one
 
@@ -112,9 +108,7 @@ review.
 
 ## 7.5 Limitations we would fix with more time
 
-WebShop was never attempted. The reasoning-curator result rests on one training
-run; the two additional seeds that would be needed to support a cross-domain
-claim were not completed. Our absolute baseline gap is unexplained. And the deepest
+WebShop was never attempted. Our absolute baseline gap is unexplained. And the deepest
 limitation is one we can now quantify rather than fix: ALFWorld provides 274
 valid games in total, which caps a paired comparison at roughly 9pp resolution.
 Serious measurement of a 5pp agent-memory effect needs either a larger benchmark

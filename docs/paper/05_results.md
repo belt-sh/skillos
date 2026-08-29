@@ -92,58 +92,45 @@ and the best arms (ckpt50, ckpt60) match the baseline exactly. This is the
 definitive same-agent result: fixing the reward-measurement fidelity gap that
 compromised earlier TRL runs did not produce a lift; it confirmed the null.
 
-## 5.3 Cross-domain transfer is the only positive result
+## 5.3 Cross-domain transfer does not replicate across seeds
 
-A curator trained on mathematics (DeepMath-103K), evaluated on ALFWorld. The
-checkpoint was selected as best-of-four on `valid_seen`, so `valid_unseen` is a
-genuine held-out test for it.
+A curator trained on mathematics (DeepMath-103K), evaluated on ALFWorld
+`valid_unseen` (134 games), against a contemporaneous 39.6% baseline.
 
-| arm | valid_seen (140) | valid_unseen (134) |
-|---|---|---|
-| Gemini 2.5 Pro curator | -1.4pp, p=0.86 | +6.0pp, p=0.28 |
-| reasoning curator ckpt50 | +4.3pp, p=0.31 | **+9.0pp, p=0.073** |
+**Seed-1** (the original run) had previously produced the project's only
+correction-surviving result: ckpt60 at +11.2pp (p=0.003) on an earlier
+measurement. Against a contemporaneous control, seed-1 is flat:
 
-Pooled over both splits the trained curator gives +6.6pp, p=0.030, but we report
-this as secondary: half the pool is the split the checkpoint was selected on, so
-the pooled p-value is optimistic. The primary number is the held-out +9.0pp at
-p=0.073, against an MDE of 12.9pp, which is suggestive and below our own
-detection threshold.
-
-The direction is notable independent of significance. Curators trained on
-ALFWorld do not help an ALFWorld executor; a curator trained on mathematics
-does. This is also the arm family that, measured during an API outage, produced
-a large *negative* cross-domain effect that we retracted (Appendix B.1).
-
-**Neighbouring checkpoints on the held-out split.** We committed to reporting
-these either way, so: they are mixed, and they cost the simple version of this
-result.
-
-| checkpoint | held-out delta | p | Holm (7-arm family) |
+| seed-1 checkpoint | success | delta | p |
 |---|---|---|---|
-| ckpt45 | +1.5pp | 0.87 | 1.00 |
-| ckpt50 (selected on `valid_seen`) | +9.0pp | 0.073 | 0.36 |
-| ckpt55 | +0.0pp | 1.00 | 1.00 |
-| ckpt60 | **+11.2pp** | **0.0026** | **0.0156** |
+| ckpt45 | 38.8% | -0.7pp | 1.00 |
+| ckpt50 | 38.8% | -0.7pp | 1.00 |
+| ckpt55 | 38.8% | -0.7pp | 1.00 |
+| ckpt60 | 40.3% | +0.7pp | 1.00 |
 
-The strongest arm in the family is one we did not select, ckpt60, and it is the
-only reasoning-curator arm that survives Holm correction. Its two immediate
-neighbours are indistinguishable from the control. So the effect is neither a
-pure selection artifact, since an unselected checkpoint carries the largest and
-only correction-surviving effect, nor a stable property of the trained curator,
-since adjacent checkpoints show nothing.
+**Seeds 2 and 3** are directionally positive but not significant:
 
-The honest reading is that **checkpoint-to-checkpoint variance is comparable to
-the effect**, which is the same non-monotone instability documented in Section 5.2
-for the ALFWorld-trained runs, here with one checkpoint landing above the
-correction threshold. Deciding between "a real effect at an unstable location" and
-"a wide lottery with one lucky ticket" needs the two additional training seeds
-below, which we do not have. We therefore report ckpt60 as the project's one
-correction-surviving curator result and decline to claim it reproduces.
+| arm | success | delta | p |
+|---|---|---|---|
+| s2 ckpt45 | 43.3% | +3.7pp | 0.49 |
+| s2 ckpt50 | 44.8% | +5.2pp | 0.32 |
+| s2 ckpt55 | 35.8% | -3.7pp | 0.44 |
+| s2 ckpt60 | 40.3% | +0.7pp | 1.00 |
+| s3 ckpt45 | 42.5% | +3.0pp | 0.54 |
+| **s3 ckpt50** | **46.3%** | **+6.7pp** | **0.12** |
+| s3 ckpt55 | 39.6% | +0.0pp | 1.00 |
+| s3 ckpt60 | 41.0% | +1.5pp | 0.87 |
 
-**Two additional reasoning-curator training seeds were not completed.** A single
-training run cannot support a claim about cross-domain transfer, and we do not
-make one. We report ckpt60 as the project's one correction-surviving curator
-result and leave it at that.
+No arm in any seed reaches p<0.05. The best across all three seeds is s3 ckpt50
+at +6.7pp (p=0.12), against an MDE of ~13pp on 134 games. Eight of twelve arms
+are positive, which is more than chance, but the magnitudes are small and
+unstable across checkpoints within each seed.
+
+The earlier ckpt60 +11.2pp result was a single-run, single-checkpoint observation
+that does not survive contemporaneous re-measurement or replication. We retract
+it as a finding. What remains is a directional tendency — reasoning-trained
+curators produce small positive effects more often than ALFWorld-trained curators
+do — that this protocol cannot resolve.
 
 ## 5.4 A frontier curator is not better than no curator
 

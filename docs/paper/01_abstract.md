@@ -2,7 +2,7 @@
 
 SkillOS trains a curator model with GRPO to maintain a markdown skill repository
 for a frozen executor, and reports a 13.3 percentage point improvement in
-ALFWorld task success. We reproduced the method on 8xH100, across eight complete
+ALFWorld task success. We reproduced the method on 8xH100, across ten complete
 60-step training runs in two independent RL frameworks (TRL with ZeRO-3 and
 verl-agent/GiGPO with FSDP), three seeds, two executor scales, and approximately
 one hundred evaluation arms of 140 paired games each.
@@ -11,8 +11,10 @@ The method works. Curators trained with GRPO produce coherent skill repositories
 the reward gradient is dominated by task success, and the training converges
 without pathology. On the paper's strongest claim, cross-executor transfer, an
 8B-trained curator lifts a 32B executor to 62.1% (+12.9pp, p=0.006), at parity
-with the paper's 61.2%. A cross-domain curator trained on mathematics yields
-+11.2pp on a held-out ALFWorld split (p=0.003, survives Holm correction).
+with the paper's 61.2%. Cross-domain curators trained on mathematics are
+directionally positive on ALFWorld in two of three seeds, but no arm reaches
+significance; the one seed-1 result that previously survived Holm correction
+(+11.2pp) does not replicate.
 
 What we could not reproduce is the stability. Across over 60 checkpoint arms on
 the training executor, no same-agent improvement survives multiplicity correction,

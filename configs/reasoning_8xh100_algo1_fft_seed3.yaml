@@ -10,8 +10,8 @@ output_dir: ./output/reasoning-8xh100-algo1-fft-seed3
 epochs: 1
 max_steps: 60                     # paper Table 4 (reasoning ~2.5 days on 16 H100)
 num_episodes: 3550                # ~355 groups × |G|=10, same shape as ALFWorld
-batch_size: 2
-gradient_accumulation_steps: 2    # 2 × 2 × 8 procs = 32 (paper effective batch)
+batch_size: 1
+gradient_accumulation_steps: 4    # 1 × 4 × 8 procs = 32 (paper effective batch)
 learning_rate: 1.0e-6
 num_generations: 8
 max_completion_length: 4096
