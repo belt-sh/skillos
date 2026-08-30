@@ -381,6 +381,21 @@ The four reasoning-transfer arms ran while the executor API returned `HTTP 401 i
 
 **Fixes.** The harness abandons the episode instead of inventing a move, records `errored`, excludes it from the rate, counts parse-level action coercions (`get_parse_stats()`, first measured at **3.6%** of actions), and **aborts any arm** that loses more than `SKILLOS_EVAL_MAX_ERROR_RATE` (default 2%) of its episodes. `scripts/reeval_all.sh` re-runs arms at reduced request rate into `output/reeval/`, leaving the contaminated originals in place as evidence.
 
+## Finding: skills pollute the executor's action vocabulary
+
+The coercion rate (2.1% no-memory → 7-9% with skills) is not a formatting failure. Inspecting the raw executor output on every coerced action shows that the model produces correctly formatted `<action>...</action>` tags every time. The action inside is drawn from the **skill vocabulary** rather than the environment's admissible commands.
+
+Typical failure: a curator-written skill is titled `locate_object` and describes a multi-step search procedure. The 8B executor reads this, and on its next turn emits `<action>locate_object cd</action>` — a command that does not exist in ALFWorld. The environment only accepts `go to desk 1`, `examine shelf 2`, `take cd from shelf 2`, etc.
+
+The model confuses skill-described procedures (abstract advice about what to do) with environment-level commands (what it can type). This confusion scales with the amount of skill text in the prompt and does not occur at the same rate on a 32B executor.
+
+This directly explains the project's central pattern:
+- **Same-agent (8B→8B) null:** skills hurt because the executor treats skill names as actions.
+- **Cross-executor (8B→32B) positive:** the 32B executor can separate advice from interface.
+- **More skills = more failures:** longer skill repos introduce more fake action names.
+
+The actionable implication: skill-augmented agents need an executor large enough to distinguish between procedural advice and the action grammar of its environment. Below that capacity threshold, skills actively degrade performance.
+
 ## References
 
 - Ouyang et al., 2026. *SkillOS: Learning Skill Curation for Self-Evolving Agents.* [arXiv:2605.06614](https://arxiv.org/abs/2605.06614)

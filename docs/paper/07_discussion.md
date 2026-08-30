@@ -29,9 +29,13 @@ reward by +0.035 over 60 steps.
 
 **The effect requires a stronger executor than ours.** Our absolute baseline is
 8pp below the original's after eliminating six causes, and Section 5.5 shows our
-executor gets *worse* at emitting valid actions when given skills. An executor at
-the edge of its instruction-following capacity may be unable to convert good notes
-into good actions. The 32B transfer family, once re-paired, speaks to this.
+executor gets *worse* at emitting valid actions when given skills. The mechanism
+is specific: the executor mistakes skill titles (e.g. `locate_object`) for
+environment commands, producing correctly formatted actions that reference a
+vocabulary the environment does not accept. A 32B executor does not make this
+mistake, which directly explains why cross-executor transfer works and same-agent
+does not. Skill-augmented agents need an executor that can distinguish between
+procedural advice and the interface it acts through.
 
 **We implemented something subtly different.** Always possible, and the
 unexplained baseline gap is evidence for it. We have released everything needed

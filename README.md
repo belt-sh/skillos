@@ -197,6 +197,7 @@ Confirmed:
 - Reasoning curator training is a **null** on same-domain eval (best ckpt30, −0.8pp vs the 61.2% aggregate baseline)
 - Reasoning baselines reproduce the paper within 1.1σ on average across AIME24/25 + GPQA-D
 - ALFWorld baseline gap is env-specific (the same executor matches the paper on reasoning)
+- **Skills pollute the executor's action space.** The 8B executor mistakes skill titles (e.g. `locate_object`) for environment commands, producing correctly formatted `<action>` tags around actions that don't exist in ALFWorld. The 32B executor does not make this mistake. This is the mechanism behind the coercion rate jump (2.1% → 7-9%) and explains why cross-executor transfer works while same-agent does not: the bottleneck is the executor's ability to separate advice from interface.
 
 Suggestive (directional, underpowered):
 - **ALFWorld-curator → reasoning transfer is asymmetric**: fft-seed2 ckpt35 +6.7pp on AIME24+25, fft-seed3 ckpt55 −8.3pp, v8-lora ckpt30 −1.7pp. All n=60, all p > 0.2 — needs higher-n to establish.
