@@ -165,11 +165,25 @@ same 134 held-out games:
 | Gemini 2.5 Pro curator | 9.1% |
 
 Adding retrieved skills to the prompt triples to quadruples the rate at which
-this 8B executor emits something the environment cannot accept. This is a direct
-mechanism for memory failing to help, or hurting, a small model: the notes
-compete with the output format for the model's limited instruction-following
-capacity. It is also a candidate contributor to our absolute baseline gap, though
-not the whole of it, since the no-memory rate is only 2.1%.
+this 8B executor emits something the environment cannot accept.
+
+Inspecting the failed parses reveals the mechanism. In every observed case the
+executor produces correctly formatted `<action>...</action>` tags, but the action
+inside is drawn from the **skill vocabulary** rather than the environment's
+admissible commands. A typical failure: a skill describes a `locate_object`
+procedure; the executor emits `<action>locate_object cd</action>` when the
+environment only accepts `go to desk 1`, `examine shelf 2`, etc. The model
+confuses skill-described procedures (abstract advice about what to do) with
+environment-level commands (what it can actually say), and this confusion scales
+with the amount of skill text in the prompt.
+
+This is not a formatting failure or an instruction-following failure in the
+usual sense. The model follows the format perfectly. It fails to distinguish
+between two vocabularies presented in the same context window: the environment's
+action grammar and the curator's procedural language. A larger model (32B) does
+not exhibit this at the same rate, which is consistent with the cross-executor
+transfer result and suggests that the bottleneck for skill-augmented agents is
+the executor's capacity to separate advice from interface.
 
 ## 5.6 Content controls: is it the skills, or just more text?
 
