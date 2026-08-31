@@ -182,8 +182,17 @@ usual sense. The model follows the format perfectly. It fails to distinguish
 between two vocabularies presented in the same context window: the environment's
 action grammar and the curator's procedural language. A larger model (32B) does
 not exhibit this at the same rate, which is consistent with the cross-executor
-transfer result and suggests that the bottleneck for skill-augmented agents is
-the executor's capacity to separate advice from interface.
+transfer result.
+
+However, skill-vocabulary confusion is only 7% of the parse failures we
+observed. The dominant failure mode (63%) is the executor emitting a real
+ALFWorld command that is not admissible in the current state — a state-tracking
+error. Renaming skills to avoid action-like titles (e.g. "Guide: locate and pick
+up object" instead of `locate_and_pick_up_object`) eliminates the vocabulary
+confusion entirely in a 30-game test, but does not reduce the overall failure
+rate, because the additional context degrades the executor's state tracking
+regardless of how the skills are named. The bottleneck for this executor is
+context length, not naming convention.
 
 ## 5.6 Content controls: is it the skills, or just more text?
 

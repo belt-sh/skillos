@@ -17,6 +17,16 @@ _RETRIEVAL_MODE = os.environ.get("SKILLOS_RETRIEVAL_MODE", "bm25").lower()
 _SHUFFLE_SEED = os.environ.get("SKILLOS_RETRIEVAL_SHUFFLE_SEED", "0")
 
 
+def _descriptive_title(name: str) -> str:
+    """Convert action-like skill names to descriptive phrases.
+
+    'locate_and_pick_up_object' -> 'How to find and pick up an object'
+    'heat_and_place_tomato_in_fridge' -> 'How to heat and place tomato in fridge'
+    """
+    words = name.replace("_", " ")
+    return f"Guide: {words}"
+
+
 @dataclass
 class Skill:
     name: str
@@ -133,9 +143,11 @@ class SkillRepo:
         """Format skills for injection into a prompt."""
         if not skills:
             return "No relevant skills found."
+        rename = os.environ.get("SKILLOS_SKILL_RENAME", "") == "1"
         parts = []
         for i, skill in enumerate(skills, 1):
-            parts.append(f"### Skill {i}: {skill.name}\n{skill.content}")
+            name = _descriptive_title(skill.name) if rename else skill.name
+            parts.append(f"### Skill {i}: {name}\n{skill.content}")
         return "\n\n".join(parts)
 
     def total_tokens(self) -> int:
