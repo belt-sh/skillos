@@ -4,18 +4,28 @@
 
 In May the agent measured a no-memory baseline at 33.6% and used it as the
 reference for every subsequent evaluation. Ten weeks later the same measurement
-returned 39.3-41.4% — a 5.7 percentage point shift on the same games, same
-harness, same model name.
+returned 39.3-41.4% — a 5.7 percentage point shift on the same games and the
+same model name.
 
-Every lift reported in those ten weeks was inflated by roughly 6 points. Our
-"strongest result" went from +13.6pp (p=0.003) to +3.6pp (p=0.47) when
-re-paired. Three seeds and two frameworks had all agreed on the significance of
-the effect, because they were all subtracting the same wrong number.
+We do not know what caused the shift. Two things changed between the
+measurements: the hosted model endpoint (served via OpenRouter, which routes to
+third-party providers whose weights and infrastructure change without notice)
+and our own eval harness (we fixed a fallback-action bug and timeout handling
+between May and August). The 8B baseline went up while the 32B baseline went
+down — opposite directions — which makes a single-cause explanation unlikely.
+We cannot re-run the May harness against the August endpoint to isolate the
+contribution, and we did not try.
+
+The cause matters less than the consequence. Every lift reported in those ten
+weeks was computed against the May number. Our "strongest result" went from
++13.6pp (p=0.003) to +3.6pp (p=0.47) when re-paired against an August control.
+Three seeds and two frameworks had all agreed on the significance of the effect,
+because they were all subtracting the same wrong number.
 
 The agent never questioned the baseline. It had no reason to: the number was
-measured, recorded, and internally consistent. The drift happened upstream —
-either in the hosted model endpoint or in harness changes between the two
-measurements — and nothing in the agent's pipeline checked for it.
+measured, recorded, and internally consistent. Whatever moved — endpoint,
+harness, or both — nothing in the agent's pipeline checked whether the reference
+was still valid.
 
 **What would have caught it:** re-measuring the control alongside every batch of
 arms. One extra eval per sweep, roughly 2 hours of compute, would have surfaced
