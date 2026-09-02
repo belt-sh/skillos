@@ -131,11 +131,22 @@ because they were all subtracting the same wrong number.
 
 The root cause is architectural. The paper used 16 H100s and ran everything
 locally — executor, judge, and baseline all on the same frozen weights. We had
-8 and moved the executor and judge to a hosted API to free local capacity
-for training. That trade-off made the project possible on half the hardware,
-but it turned the baseline from a fixed local measurement into a query against
-a remote system we did not control. The drift — whatever its source — could only
-happen because we chose to run baselines remotely.
+8 and moved the executor and judge to a hosted API to free local capacity for
+training. That trade-off made the project possible on half the hardware, but it
+turned the baseline from a fixed local measurement into a query against a remote
+system we did not control.
+
+We do not know what moved. The hosted endpoint serves the same model name
+through third-party providers whose context handling, quantization, and
+infrastructure change without notice. We also changed our own eval harness
+between the two measurements (fixing a fallback-action bug and timeout
+handling). The 8B baseline went up while the 32B went down — opposite
+directions — which makes a single cause unlikely. We tried reaching out to the
+original SkillOS authors twice over the course of the project to ask about their
+executor setup, but received no reply.
+
+The drift — whatever its source — could only happen because we chose to run
+baselines remotely. A local executor on frozen weights cannot drift.
 
 The agent never questioned the baseline. It had no reason to: the number was
 measured, recorded, and internally consistent. Nothing in the pipeline checked
