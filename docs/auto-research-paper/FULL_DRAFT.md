@@ -129,10 +129,18 @@ weeks was computed against the May number. Our "strongest result" went from
 Three seeds and two frameworks had all agreed on the significance of the effect,
 because they were all subtracting the same wrong number.
 
+The root cause is architectural. The paper used 16 H100s and ran everything
+locally — executor, judge, and baseline all on the same frozen weights. We had
+8 and moved the executor and judge to a hosted API to free local capacity
+for training. That trade-off made the project possible on half the hardware,
+but it turned the baseline from a fixed local measurement into a query against
+a remote system we did not control. The drift — whatever its source — could only
+happen because we chose to run baselines remotely.
+
 The agent never questioned the baseline. It had no reason to: the number was
-measured, recorded, and internally consistent. Whatever moved — endpoint,
-harness, or both — nothing in the agent's pipeline checked whether the reference
-was still valid.
+measured, recorded, and internally consistent. Nothing in the pipeline checked
+whether the reference was still valid, and nothing about the remote executor
+signaled that it had changed.
 
 **What would have caught it:** re-measuring the control alongside every batch of
 arms. One extra eval per sweep, roughly 2 hours of compute, would have surfaced
