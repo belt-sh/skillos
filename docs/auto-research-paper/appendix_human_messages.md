@@ -1,10 +1,11 @@
 # Every message from the human
 
-916 messages across a three-month ML reproduction project (May-Sep 2026).
+695 messages across a three-month ML reproduction project (May-Sep 2026).
 One human directing one LLM agent on 8xH100.
 
 Credentials redacted. Tool output stripped. Typos preserved.
-Messages marked [PASTE] are copy-pasted content (agent output, paper text, UI dumps).
+223 automated loop-check messages ("is everything okay") excluded.
+Messages marked [PASTE] are copy-pasted content.
 
 ---
 
@@ -1250,410 +1251,65 @@ Last used within the last week — Read/write
 
 > do it dont waste my h100 hours anymore ffs lfg
 
-> <command-message>loop</command-message>
-<command-name>/loop</command-name>
-<command-args>1h is everything okay reply very briefly</command-args>
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 
 ## 2026-07-30
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > status %?
 
 > why did we go from 2 hours to 5 hours step time
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > what is running right now are you making calls to inference sh via belt or api? git:github.com/belt-sh/skillos module:skillos lang:python path:/home/ubuntu/skillos host:gpu-cluster-luxembourg-3-eb4n5-5380400a im getting insane amounts of empty harrier suggest triggers from this machine. it normally just runs with user messages here via belt plugin. something must be wrong
 
 > is this a belt bug?
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 
 ## 2026-07-31
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > % progress
-
-> is everything okay reply very briefly
 
 > how come step times are more than twice of trl?
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > sorry what was your answer regarding the slowness?
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > *[PASTE, 1880 chars]* i asked earlier why training is slow...
 
 
 ## 2026-08-01
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > TRL did run full Algorithm 1 (I read the superseded curator_env.py inste does this mean our trl implementation / test was not fully paper aligned and misleading resutls?
 
 > then eli5 why verl still 2x slower does 2x more something
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > /compact
 
 > i still dont udnerstand how verl is twice as much slower
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 
 ## 2026-08-02
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > eli5 one sentence why trl verl not same speed
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > wwhy erl's "step" runs 640 ALFWorld episodes where TRL's runs 320,
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 
 ## 2026-08-03
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > pls print % progress and remaining time at each ping thanks
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > /compact
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 
 ## 2026-08-04
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > is it looking better than trl?
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > bro could we really have ran 600k qwen8b in the last 24hr
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 > are there too many monitors too frequent?
-
-> is everything okay reply very briefly
 
 > now 4 monitors ?
 
 > /compact
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-
-## 2026-08-05
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 
 ## 2026-08-06
@@ -1676,119 +1332,12 @@ Last used within the last week — Read/write
 
 > isnt there an hourly monitor anymore what are the 2 monitors runnign
 
-> is everything okay reply very briefly
-
 > should we restart from 40 ?
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > didnt step 40 problem affect later steps ?
 
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-
-## 2026-08-09
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
 
 ## 2026-08-10
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
-
-> is everything okay reply very briefly
 
 > holup. sgut down the monitors mate whats the result. is trl verl compatible. did you write up the findings. are we fully done replicatong the paper. ready to write a report?
 
@@ -2210,7 +1759,9 @@ are we sure its was miscalcuation or remote changed?
 
 > can you see/exclude copy paste content
 
+> can you see if its from the loop at every message or is that your geuss
+
 
 ---
 
-**904 voice messages, 12 pastes.**
+**683 voice messages, 12 pastes, 223 loop checks excluded.**
