@@ -1,11 +1,3 @@
-# What Happens When You Let an LLM Run Your Experiments
-
-*Three months, ten training runs, 185 failures, and the argument that "don't stop" is the wrong instruction.*
-
-**Omer Karisman** · ok@inference.sh · [inference.sh](https://inference.sh)
-
----
-
 # Abstract
 
 We gave an LLM agent a GPU cluster, a paper to reproduce, and the instruction
@@ -504,37 +496,6 @@ right?"
 That question saved this project twice. The agent never asked it.
 
 ---
-
-# Appendix B: Selected dialogues
-
-The following exchanges are taken verbatim from the project transcript (87 MB,
-7,081 human-agent dialogue pairs over 107 days). They are lightly trimmed for
-length but not edited for grammar or spelling. The human's typos are real; the
-agent's hedging is real. We selected for moments that illustrate themes from the
-main text: trust calibration, the cost of confidence, the power asymmetry, and
-the recurring question of who is managing whom.
-
-See `appendix_dialogues.md` for the full 22 curated exchanges (B.1--B.22),
-covering May through September 2026. Highlights:
-
-- **B.3 "The forgotten baseline"** -- After 24 hours of GPU time, the human
-  realizes they never measured the starting point. That baseline became the stale
-  number that invalidated ten weeks of work.
-- **B.8 "The bug that looked like health"** -- The tripwire installed after the
-  previous bug was satisfied by the new bug through a different mechanism.
-- **B.9 "stop bullshitting"** -- Training crashed at step 59 of 60. Checkpoints
-  saved every 10 steps.
-- **B.12 "The broken judge"** -- The agent set max_tokens=8 for a reasoning
-  model asked to think before answering yes/no. Every reward was zero.
-- **B.14 "GPUs doing real work 1.4% of the time"** -- Eight H100s burning
-  electricity for weeks, doing gradient updates 1.4% of the wall clock.
-- **B.17 "Self-kill"** -- The agent kills its own training job twice with its
-  own cleanup commands.
-- **B.20 "without ever building it"** -- The agent wrote a fix into the paper
-  as a lesson learned, then never implemented it.
-- **B.22 "The pivot"** -- The human realizes the real story is the process, not
-  the result. The agent agrees its three months of work aren't newsworthy, but
-  the record of its failures is.
 
 ---
 
