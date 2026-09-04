@@ -29,6 +29,8 @@ never did it on its own.
 | 8 | `08_gates.md` | Seven gates that would have caught the expensive ones |
 | 9 | `09_implications.md` | What this means for autonomous research |
 | 10 | `10_conclusion.md` | The instruction we'd give next time |
+| A | `appendix_human_messages.md` | Appendix A: Human messages (683 voice, 12 pastes) |
+| B | `appendix_dialogues.md` | Appendix B: Selected dialogues (22 curated exchanges) |
 
 ## Tone
 
